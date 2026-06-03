@@ -1,0 +1,35 @@
+version: '3.8'
+
+# Dùng Supabase Cloud? → Chỉ cần chạy app service, xóa db service.
+# Dùng local dev?       → uncomment db service bên dưới.
+
+services:
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      SUPABASE_JWT_SECRET: ${SUPABASE_JWT_SECRET}
+      SUPABASE_DB_URL: ${SUPABASE_DB_URL}
+      SUPABASE_DB_USER: ${SUPABASE_DB_USER:-postgres}
+      SUPABASE_DB_PASSWORD: ${SUPABASE_DB_PASSWORD}
+      SPRING_PROFILE: ${SPRING_PROFILE:-dev}
+    restart: unless-stopped
+
+  # Uncomment for local PostgreSQL (no Supabase Auth in this mode)
+  # db:
+  #   image: postgres:16-alpine
+  #   environment:
+  #     POSTGRES_DB: airsoft
+  #     POSTGRES_USER: postgres
+  #     POSTGRES_PASSWORD: postgres
+  #   ports:
+  #     - "5432:5432"
+  #   volumes:
+  #     - pgdata:/var/lib/postgresql/data
+
+# volumes:
+#   pgdata:

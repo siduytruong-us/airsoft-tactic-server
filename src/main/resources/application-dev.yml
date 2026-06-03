@@ -1,0 +1,19 @@
+spring:
+  jpa:
+    show-sql: true
+    hibernate:
+      ddl-auto: none
+
+  flyway:
+    enabled: true
+
+  # Uncomment 3 dòng dưới nếu muốn chạy HOÀN TOÀN không cần DB:
+#  autoconfigure:
+#    exclude:
+#      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+#      - org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration
+#      - org.springframework.boot.autoconfigure.data.jpa.JpaRepositoriesAutoConfiguration
+
+logging:
+  level:
+    com.airsoft: DEBUG
