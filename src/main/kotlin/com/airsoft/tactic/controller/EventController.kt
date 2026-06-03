@@ -55,8 +55,8 @@ class EventController(private val eventService: EventService) {
         auth: Authentication
     ): ResponseEntity<ApiResponse<EventResponse>> {
         val role = auth.authorities.firstOrNull()?.authority ?: ""
-        if (!role.contains("ORGANIZER") && !role.contains("ADMIN")) {
-            throw AppException.forbidden("Only organizers can create events")
+        if (!role.contains("ADMIN")) {
+            throw AppException.forbidden("Only admins can create events")
         }
         val userId = UUID.fromString(auth.name)
         return ResponseEntity.status(HttpStatus.CREATED)

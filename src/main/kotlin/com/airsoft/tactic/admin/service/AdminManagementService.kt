@@ -89,7 +89,7 @@ class AdminManagementService(
 
     @Transactional
     fun updateUserRole(userId: UUID, req: UpdateUserRoleRequest): UserSummary {
-        val validRoles = setOf("player", "organizer", "admin")
+        val validRoles = setOf("player", "admin")
         if (req.role !in validRoles)
             throw AppException.unprocessable("VALIDATION_ERROR", "Invalid role: ${req.role}")
         val user = userRepository.findById(userId)

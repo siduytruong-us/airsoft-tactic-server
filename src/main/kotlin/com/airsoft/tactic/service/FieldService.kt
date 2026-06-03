@@ -28,11 +28,11 @@ class FieldService(
     }
 
     private fun toSummary(field: Field): FieldResponse {
-        val active = matchRepository.findActiveByFieldId(field.id!!)
+        val active = matchRepository.findActiveByFieldId(field.id!!).firstOrNull()
         val modes  = gameModeRepository.findByFieldId(field.id!!)
         return FieldResponse(
             id = field.id!!, name = field.name, location = field.location,
-            lat = null, lng = null, coverImageUrl = field.coverImageUrl,
+            lat = field.lat, lng = field.lng, coverImageUrl = field.coverImageUrl,
             description = null,
             isLive = active?.status == "IN_PROGRESS",
             activeMatchId = active?.id,
@@ -42,7 +42,7 @@ class FieldService(
     }
 
     private fun toDetail(field: Field): FieldResponse {
-        val active = matchRepository.findActiveByFieldId(field.id!!)
+        val active = matchRepository.findActiveByFieldId(field.id!!).firstOrNull()
         val modes  = gameModeRepository.findByFieldId(field.id!!)
         val currentGame = active?.let { m ->
             val teams = teamRepository.findByMatchId(m.id!!)

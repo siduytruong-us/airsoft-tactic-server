@@ -2,6 +2,7 @@ package com.airsoft.tactic.service
 
 import com.airsoft.tactic.dto.request.CreateMatchRequest
 import com.airsoft.tactic.dto.request.EndMatchRequest
+import com.airsoft.tactic.dto.request.PingRequest
 import com.airsoft.tactic.dto.response.*
 import com.airsoft.tactic.entity.*
 import com.airsoft.tactic.exception.AppException
@@ -19,18 +20,31 @@ class MatchService(
     private val teamRepository: TeamRepository,
     private val matchPlayerRepository: MatchPlayerRepository,
     private val hitEventRepository: HitEventRepository,
+    private val pingEventRepository: PingEventRepository,
     private val statsRepository: PlayerStatsRepository,
     private val fieldRepository: FieldRepository,
     private val gameModeRepository: GameModeRepository,
     private val userRepository: UserRepository,
+    private val adminAccountRepository: AdminAccountRepository,
     private val eventPublisher: MatchEventPublisher
 ) {
     @Transactional
     fun createMatch(creatorId: UUID, req: CreateMatchRequest): MatchResponse {
         val field   = fieldRepository.findById(req.fieldId).orElseThrow { AppException.notFound("Field not found") }
         val gm      = gameModeRepository.findById(req.gameModeId).orElseThrow { AppException.notFound("GameMode not found") }
-        val creator = userRepository.findById(creatorId).orElseThrow { AppException.notFound("User not found") }
-        val match   = matchRepository.save(GameMatch(field = field, gameMode = gm, createdBy = creator, maxPlayers = gm.maxPlayers))
+        
+        // Match creation is restricted to admins now, so we only look in admin_accounts
+        val adminAccount = adminAccountRepository.findById(creatorId).orElseThrow { AppException.notFound("Admin not found") }
+        
+        val match = matchRepository.save(
+            GameMatch(
+                field = field, 
+                gameMode = gm, 
+                createdById = adminAccount.id!!, 
+                createdByDisplayName = adminAccount.displayName,
+                maxPlayers = gm.maxPlayers
+            )
+        )
 
         val names  = listOf("Alpha","Bravo","Charlie","Delta","Echo","Foxtrot")
         val colors = listOf("#3B82F6","#EF4444","#22C55E","#F59E0B","#8B5CF6","#EC4899")
@@ -47,7 +61,7 @@ class MatchService(
     }
 
     fun getActiveMatch(userId: UUID): MatchResponse? =
-        matchRepository.findActiveMatchForUser(userId)?.let { getMatch(it.id!!, userId) }
+        matchRepository.findActiveMatchForUser(userId).firstOrNull()?.let { getMatch(it.id!!, userId) }
 
     @Transactional
     fun joinTeam(matchId: UUID, teamId: UUID, userId: UUID): Map<String, Any> {
@@ -79,9 +93,8 @@ class MatchService(
     @Transactional
     fun startMatch(matchId: UUID, userId: UUID): MatchResponse {
         val match = findMatch(matchId)
-        if (match.createdBy.id != userId) throw AppException.forbidden("Only the match creator can start")
+        if (match.createdById != userId) throw AppException.forbidden("Only the match creator can start")
         if (match.status != "WAITING") throw AppException.unprocessable("INVALID_STATUS_TRANSITION", "Match is not WAITING")
-        if (matchPlayerRepository.countByMatchId(matchId) < 2) throw AppException.unprocessable("MATCH_NOT_JOINABLE", "Need at least 2 players")
 
         match.status    = "IN_PROGRESS"
         match.startedAt = Instant.now()
@@ -111,7 +124,7 @@ class MatchService(
     @Transactional
     fun endMatch(matchId: UUID, userId: UUID, req: EndMatchRequest): MatchResponse {
         val match = findMatch(matchId)
-        if (match.createdBy.id != userId) throw AppException.forbidden("Only the match creator can end")
+        if (match.createdById != userId) throw AppException.forbidden("Only the match creator can end")
         if (match.status != "IN_PROGRESS") throw AppException.unprocessable("INVALID_STATUS_TRANSITION", "Match not in progress")
 
         match.status       = "ENDED"
@@ -129,6 +142,56 @@ class MatchService(
             content = entries.map { toHistoryEntry(it, userId) },
             page = pageable.pageNumber, size = pageable.pageSize,
             totalElements = entries.size.toLong(), totalPages = 1, last = true
+        )
+    }
+
+    fun getMatchesByField(fieldId: UUID): List<MatchResponse> {
+        val matches = matchRepository.findByFieldId(fieldId)
+        return matches.map { match -> toDetail(match, teamRepository.findByMatchId(match.id!!), null) }
+    }
+
+    @Transactional
+    fun sendPing(matchId: UUID, userId: UUID, request: PingRequest): PingResponse {
+        val match = findMatch(matchId)
+        if (match.status != "IN_PROGRESS") throw AppException.unprocessable("MATCH_NOT_IN_PROGRESS", "Match is not in progress")
+        if (!matchPlayerRepository.existsByMatchIdAndUserId(matchId, userId)) throw AppException.forbidden("You are not a member of this match")
+
+        val user = userRepository.findById(userId).orElseThrow { AppException.notFound("User not found") }
+        val ping = pingEventRepository.save(
+            PingEvent(
+                match = match,
+                user = user,
+                latitude = request.latitude,
+                longitude = request.longitude,
+                pingType = request.pingType
+            )
+        )
+
+        val createdAt = ping.createdAt ?: Instant.now()
+        val expiresAt = createdAt.plusSeconds(10)
+
+        eventPublisher.pingSent(
+            matchId = matchId,
+            pingId = ping.id!!,
+            userId = userId,
+            displayName = user.displayName,
+            latitude = ping.latitude,
+            longitude = ping.longitude,
+            pingType = ping.pingType,
+            createdAt = createdAt,
+            expiresAt = expiresAt
+        )
+
+        return PingResponse(
+            id = ping.id!!,
+            matchId = matchId,
+            userId = userId,
+            displayName = user.displayName,
+            latitude = ping.latitude,
+            longitude = ping.longitude,
+            pingType = ping.pingType,
+            createdAt = createdAt,
+            expiresAt = expiresAt
         )
     }
 

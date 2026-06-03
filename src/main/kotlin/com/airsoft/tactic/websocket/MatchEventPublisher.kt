@@ -66,4 +66,31 @@ class MatchEventPublisher(private val messaging: SimpMessagingTemplate) {
             )
         )
     }
+
+    fun pingSent(
+        matchId: UUID,
+        pingId: UUID,
+        userId: UUID,
+        displayName: String,
+        latitude: Double,
+        longitude: Double,
+        pingType: String,
+        createdAt: Instant,
+        expiresAt: Instant
+    ) {
+        messaging.convertAndSend(
+            "/topic/match/$matchId/game", mapOf(
+                "event" to "PING_SENT",
+                "matchId" to matchId,
+                "pingId" to pingId,
+                "userId" to userId,
+                "displayName" to displayName,
+                "latitude" to latitude,
+                "longitude" to longitude,
+                "pingType" to pingType,
+                "createdAt" to createdAt.toString(),
+                "expiresAt" to expiresAt.toString()
+            )
+        )
+    }
 }

@@ -26,9 +26,11 @@ class GameMatch(
     @Column(name = "max_players", nullable = false)
     var maxPlayers: Int = 20,
 
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "created_by", nullable = false)
-    var createdBy: User,
+    @Column(name = "created_by_id", nullable = false)
+    var createdById: UUID,
+
+    @Column(name = "created_by_display_name", nullable = false)
+    var createdByDisplayName: String,
 
     @Column(name = "started_at")
     var startedAt: Instant? = null,
