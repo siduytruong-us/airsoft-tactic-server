@@ -8,11 +8,13 @@ import com.airsoft.tactic.entity.*
 import com.airsoft.tactic.exception.AppException
 import com.airsoft.tactic.repository.*
 import com.airsoft.tactic.websocket.MatchEventPublisher
+import org.slf4j.LoggerFactory
 import org.springframework.data.domain.Pageable
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.Instant
 import java.util.UUID
+import java.util.concurrent.CompletableFuture
 
 @Service
 class MatchService(
@@ -28,6 +30,8 @@ class MatchService(
     private val adminAccountRepository: AdminAccountRepository,
     private val eventPublisher: MatchEventPublisher
 ) {
+    private val logger = LoggerFactory.getLogger(MatchService::class.java)
+
     @Transactional
     fun createMatch(creatorId: UUID, req: CreateMatchRequest): MatchResponse {
         val field   = fieldRepository.findById(req.fieldId).orElseThrow { AppException.notFound("Field not found") }
@@ -55,11 +59,13 @@ class MatchService(
         return toDetail(match, teams, creatorId)
     }
 
+    @Transactional(readOnly = true)
     fun getMatch(matchId: UUID, userId: UUID?): MatchResponse {
         val match = findMatch(matchId)
         return toDetail(match, teamRepository.findByMatchId(matchId), userId)
     }
 
+    @Transactional(readOnly = true)
     fun getActiveMatch(userId: UUID): MatchResponse? =
         matchRepository.findActiveMatchForUser(userId).firstOrNull()?.let { getMatch(it.id!!, userId) }
 
@@ -136,6 +142,7 @@ class MatchService(
         return toDetail(match, teamRepository.findByMatchId(matchId), userId)
     }
 
+    @Transactional(readOnly = true)
     fun getMyMatches(userId: UUID, pageable: Pageable): PageResponse<MatchResponse> {
         val entries = matchPlayerRepository.findEndedMatchesForUser(userId, pageable)
         return PageResponse(
@@ -145,51 +152,86 @@ class MatchService(
         )
     }
 
+    @Transactional(readOnly = true)
     fun getMatchesByField(fieldId: UUID): List<MatchResponse> {
         val matches = matchRepository.findByFieldId(fieldId)
         return matches.map { match -> toDetail(match, teamRepository.findByMatchId(match.id!!), null) }
     }
 
-    @Transactional
+    @Transactional(readOnly = true)
+    fun updateLocation(matchId: UUID, userId: UUID, latitude: Double, longitude: Double) {
+        val match = matchRepository.findById(matchId).orElse(null) ?: return
+        if (match.status != "IN_PROGRESS") return
+
+        // findByMatchIdAndUserId trả null nếu player không trong match — bỏ existsBy thừa
+        val mp = matchPlayerRepository.findByMatchIdAndUserId(matchId, userId) ?: return
+        val teamId = mp.team.id!!
+
+        // Fetch user trực tiếp — tránh lazy load mp.user qua Hibernate proxy
+        val user = userRepository.findById(userId).orElse(null) ?: return
+
+        val isAlive = !hitEventRepository.existsActiveHitForPlayer(matchId, userId, Instant.now())
+
+        eventPublisher.locationUpdate(
+            matchId = matchId,
+            userId = userId,
+            teamId = teamId,
+            displayName = user.displayName,
+            latitude = latitude,
+            longitude = longitude,
+            isAlive = isAlive
+        )
+    }
+
     fun sendPing(matchId: UUID, userId: UUID, request: PingRequest): PingResponse {
         val match = findMatch(matchId)
         if (match.status != "IN_PROGRESS") throw AppException.unprocessable("MATCH_NOT_IN_PROGRESS", "Match is not in progress")
         if (!matchPlayerRepository.existsByMatchIdAndUserId(matchId, userId)) throw AppException.forbidden("You are not a member of this match")
 
         val user = userRepository.findById(userId).orElseThrow { AppException.notFound("User not found") }
-        val ping = pingEventRepository.save(
-            PingEvent(
-                match = match,
-                user = user,
-                latitude = request.latitude,
-                longitude = request.longitude,
-                pingType = request.pingType
-            )
-        )
 
-        val createdAt = ping.createdAt ?: Instant.now()
+        val pingId = UUID.randomUUID()
+        val createdAt = Instant.now()
         val expiresAt = createdAt.plusSeconds(10)
 
         eventPublisher.pingSent(
             matchId = matchId,
-            pingId = ping.id!!,
+            pingId = pingId,
             userId = userId,
             displayName = user.displayName,
-            latitude = ping.latitude,
-            longitude = ping.longitude,
-            pingType = ping.pingType,
+            latitude = request.latitude,
+            longitude = request.longitude,
+            pingType = request.pingType,
             createdAt = createdAt,
             expiresAt = expiresAt
         )
 
+        CompletableFuture.runAsync {
+            try {
+                pingEventRepository.save(
+                    PingEvent(
+                        id = pingId,
+                        match = match,
+                        user = user,
+                        latitude = request.latitude,
+                        longitude = request.longitude,
+                        pingType = request.pingType,
+                        createdAt = createdAt
+                    )
+                )
+            } catch (e: Exception) {
+                logger.error("Failed to persist ping $pingId: ${e.message}")
+            }
+        }
+
         return PingResponse(
-            id = ping.id!!,
+            id = pingId,
             matchId = matchId,
             userId = userId,
             displayName = user.displayName,
-            latitude = ping.latitude,
-            longitude = ping.longitude,
-            pingType = ping.pingType,
+            latitude = request.latitude,
+            longitude = request.longitude,
+            pingType = request.pingType,
             createdAt = createdAt,
             expiresAt = expiresAt
         )
@@ -199,13 +241,19 @@ class MatchService(
         .orElseThrow { AppException.notFound("Match not found: $id") }
 
     private fun toDetail(match: GameMatch, teams: List<Team>, userId: UUID?): MatchResponse {
-        val myMp = userId?.let { matchPlayerRepository.findByMatchIdAndUserId(match.id!!, it) }
+        // 1 query lấy toàn bộ players của match, group by teamId trong memory
+        // Trước: N+1 (findByTeamId mỗi team + countByMatchId riêng) = N+2 queries
+        // Sau: 1 query duy nhất
+        val allPlayers   = matchPlayerRepository.findByMatchId(match.id!!)
+        val playersByTeam = allPlayers.groupBy { it.team.id }
+        val myMp         = userId?.let { uid -> allPlayers.find { it.user.id == uid } }
+
         val teamDetails = teams.map { t ->
             TeamDetailResponse(
                 id = t.id!!, name = t.name, colorHex = t.colorHex,
                 objectives = t.objectives, respawnBase = t.respawnBase,
                 isWinner = t.id == match.winningTeamId,
-                players = matchPlayerRepository.findByTeamId(t.id!!).map { mp ->
+                players = (playersByTeam[t.id] ?: emptyList()).map { mp ->
                     PlayerInTeamResponse(userId = mp.user.id!!, displayName = mp.user.displayName,
                         avatarUrl = mp.user.avatarUrl, joinedAt = mp.joinedAt,
                         killCount = null, deathCount = null)
@@ -220,7 +268,7 @@ class MatchService(
             id = match.id!!, fieldId = match.field.id!!, fieldName = match.field.name,
             gameModeId = match.gameMode.id!!, gameModeName = match.gameMode.name,
             status = match.status, maxPlayers = match.maxPlayers,
-            playerCount = matchPlayerRepository.countByMatchId(match.id!!),
+            playerCount = allPlayers.size,  // dùng list đã có, không cần COUNT query
             startedAt = match.startedAt, endedAt = match.endedAt,
             winningTeamId = match.winningTeamId, winningTeamName = winningTeamName,
             durationSeconds = duration, myTeamId = myMp?.team?.id,

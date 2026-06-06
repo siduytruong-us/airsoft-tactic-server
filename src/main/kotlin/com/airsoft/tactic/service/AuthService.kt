@@ -25,9 +25,11 @@ class AuthService(
     private val refreshTokenRepository: RefreshTokenRepository,
     private val playerStatsRepository: PlayerStatsRepository,
     private val jwtUtil: JwtUtil,
-    private val webClientBuilder: WebClient.Builder,
+    webClientBuilder: WebClient.Builder,
     private val objectMapper: ObjectMapper
 ) {
+    // Reuse single WebClient — tránh overhead build() mỗi lần gọi
+    private val googleWebClient: WebClient = webClientBuilder.build()
 
     @Transactional
     fun googleSignIn(idToken: String): AuthResponse {
@@ -122,7 +124,7 @@ class AuthService(
 
     private fun verifyGoogleToken(idToken: String): JsonNode =
         try {
-            webClientBuilder.build().get()
+            googleWebClient.get()
                 .uri("https://www.googleapis.com/oauth2/v3/tokeninfo?id_token=$idToken")
                 .retrieve().bodyToMono(JsonNode::class.java).block()
                 ?: throw AppException.unauthorized("TOKEN_INVALID", "Invalid Google ID token")

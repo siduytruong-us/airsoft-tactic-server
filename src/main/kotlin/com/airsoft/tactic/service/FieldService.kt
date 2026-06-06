@@ -7,6 +7,7 @@ import com.airsoft.tactic.exception.AppException
 import com.airsoft.tactic.repository.*
 import org.springframework.data.domain.Pageable
 import org.springframework.stereotype.Service
+import org.springframework.transaction.annotation.Transactional
 import java.util.UUID
 
 @Service
@@ -20,6 +21,7 @@ class FieldService(
     fun listFields(pageable: Pageable): PageResponse<FieldResponse> =
         PageResponse.from(fieldRepository.findByIsActiveTrue(pageable).map { toSummary(it) })
 
+    @Transactional(readOnly = true)
     fun getField(fieldId: UUID, requestingUserId: UUID?): FieldResponse {
         val field = fieldRepository.findById(fieldId).orElseThrow {
             AppException.notFound("Field not found: $fieldId")

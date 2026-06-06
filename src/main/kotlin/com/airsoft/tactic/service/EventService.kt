@@ -22,6 +22,7 @@ class EventService(
     fun listEvents(userId: UUID?, pageable: Pageable): PageResponse<EventResponse> =
         PageResponse.from(eventRepository.findAll(pageable).map { toResponse(it, userId) })
 
+    @Transactional(readOnly = true)
     fun getEvent(eventId: UUID, userId: UUID?): EventResponse =
         toResponse(findEvent(eventId), userId)
 

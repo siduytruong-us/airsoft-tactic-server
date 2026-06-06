@@ -48,3 +48,4 @@ bin/
 .env
 .env.example
 .mcp.json
+.env.local

@@ -21,6 +21,7 @@ class UserService(
     private val statsRepository: PlayerStatsRepository,
     private val deviceTokenRepository: DeviceTokenRepository
 ) {
+    @Transactional(readOnly = true)
     fun getMe(userId: UUID): UserResponse {
         val user  = userRepository.findById(userId).orElseThrow { AppException.notFound("User not found") }
         val stats = statsRepository.findByUserId(userId)
@@ -35,6 +36,7 @@ class UserService(
         return toResponse(userRepository.save(user), null)
     }
 
+    @Transactional(readOnly = true)
     fun getStats(userId: UUID): StatsResponse {
         val user  = userRepository.findById(userId).orElseThrow { AppException.notFound("User not found") }
         val stats = statsRepository.findByUserId(userId) ?: PlayerStats(userId = userId)

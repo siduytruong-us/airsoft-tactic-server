@@ -157,26 +157,3 @@ CREATE TABLE IF NOT EXISTS player_stats (
     total_deaths    INT NOT NULL DEFAULT 0,
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-
--- Seed sample field + game mode for testing
-INSERT INTO fields (id, name, location, cover_image_url, description, is_active)
-VALUES (
-    'f1a2b3c4-0000-0000-0000-000000000001',
-    'Jungle Zone Alpha',
-    'Thủ Đức, TP.HCM',
-    null,
-    'A dense jungle-themed field with multiple capture points.',
-    true
-) ON CONFLICT DO NOTHING;
-
-INSERT INTO game_modes (id, field_id, name, description, rules, max_players, team_count, respawn_enabled, respawn_delay_seconds)
-VALUES (
-    'gm000001-0000-0000-0000-000000000001',
-    'f1a2b3c4-0000-0000-0000-000000000001',
-    'Team Deathmatch',
-    'Eliminate the opposing team. Last team standing wins.',
-    ARRAY['Hit player must call HIT and move to respawn base',
-          'Friendly fire counts as a hit',
-          'Match ends when one team reaches 0 respawn tokens'],
-    20, 2, true, 30
-) ON CONFLICT DO NOTHING;

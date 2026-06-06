@@ -1,6 +1,8 @@
 spring:
   config:
-    import: "optional:file:.env[.properties]"
+    import:
+      - "optional:file:.env[.properties]"
+      - "optional:file:.env.local[.properties]"  # override .env khi chạy local Docker
   application:
     name: airsoft-tactic-server
   profiles:
@@ -14,14 +16,17 @@ spring:
     driver-class-name: org.postgresql.Driver
     hikari:
       maximum-pool-size: 10
-      minimum-idle: 2
+      minimum-idle: 5
       connection-timeout: 30000
-      connection-test-query: SELECT 1
+      # connection-test-query removed — HikariCP 3+ dùng JDBC4 validation tự động,
+      # không cần SELECT 1 mỗi request (tiết kiệm ~100ms/request tới Supabase)
 
   jpa:
     hibernate:
       ddl-auto: validate
     show-sql: false
+    open-in-view: false   # tắt OSIV — release DB connection ngay khi service method return,
+                          # không giữ connection đến hết HTTP request
     properties:
       hibernate:
         dialect: org.hibernate.dialect.PostgreSQLDialect
@@ -52,6 +57,11 @@ supabase:
 
 logging:
   level:
-    root: INFO
-    com.airsoft: DEBUG
-    org.springframework.security: DEBUG
+    root: WARN
+    com.airsoft: INFO                                                          # app logs
+    org.springframework.web.filter.CommonsRequestLoggingFilter: DEBUG         # HTTP API calls
+    org.springframework.web.socket: INFO                                      # WS connect/disconnect
+    org.springframework.messaging.simp: WARN                                  # tắt STOMP frame noise
+    org.springframework.security: WARN                                        # tắt security per-request log
+    org.hibernate: WARN                                                       # tắt toàn bộ Hibernate log
+    org.flywaydb: INFO                                                        # chỉ log migration status

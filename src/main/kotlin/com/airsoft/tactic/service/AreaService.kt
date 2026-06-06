@@ -70,6 +70,7 @@ class AreaService(
      * Lấy chi tiết một area.
      * Validate area phải thuộc match (tránh IDOR).
      */
+    @Transactional(readOnly = true)
     fun getArea(matchId: UUID, areaId: UUID): AreaResponse {
         val area = findAreaInMatch(matchId, areaId)
         return toResponse(area)

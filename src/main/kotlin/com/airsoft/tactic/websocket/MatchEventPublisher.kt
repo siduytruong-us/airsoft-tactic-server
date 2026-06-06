@@ -4,6 +4,8 @@ import com.airsoft.tactic.entity.User
 import org.springframework.messaging.simp.SimpMessagingTemplate
 import org.springframework.stereotype.Component
 import java.time.Instant
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
 import java.util.UUID
 
 @Component
@@ -63,6 +65,30 @@ class MatchEventPublisher(private val messaging: SimpMessagingTemplate) {
                 "matchId" to matchId,
                 "userId" to userId,
                 "respawnAt" to (respawnAt?.toString() ?: "")
+            )
+        )
+    }
+
+    fun locationUpdate(
+        matchId: UUID,
+        userId: UUID,
+        teamId: UUID,
+        displayName: String,
+        latitude: Double,
+        longitude: Double,
+        isAlive: Boolean
+    ) {
+        messaging.convertAndSend(
+            "/topic/match/$matchId/team/$teamId", mapOf(
+                "event" to "LOCATION_UPDATE",
+                "matchId" to matchId,
+                "userId" to userId,
+                "teamId" to teamId,
+                "displayName" to displayName,
+                "latitude" to latitude,
+                "longitude" to longitude,
+                "isAlive" to isAlive,
+                "updatedAt" to DateTimeFormatter.ISO_INSTANT.format(Instant.now())
             )
         )
     }

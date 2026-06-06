@@ -9,4 +9,7 @@ import java.util.UUID
 interface HitEventRepository : JpaRepository<HitEvent, UUID> {
     @Query("SELECT h FROM HitEvent h WHERE h.match.id = :matchId AND h.user.id = :userId AND h.reportedAt > :since ORDER BY h.reportedAt DESC")
     fun findRecentHit(matchId: UUID, userId: UUID, since: Instant): HitEvent?
+
+    @Query("SELECT COUNT(h) > 0 FROM HitEvent h WHERE h.match.id = :matchId AND h.user.id = :userId AND h.respawnAt > :now")
+    fun existsActiveHitForPlayer(matchId: UUID, userId: UUID, now: Instant): Boolean
 }

@@ -1,19 +1,22 @@
+# Profile: dev — Supabase cloud PostgreSQL
+# Kích hoạt: SPRING_PROFILE=dev trong .env
+# Dùng cho: development, testing với Supabase, sau này CI/CD pipeline GitHub
+
 spring:
   jpa:
-    show-sql: true
+    show-sql: false             # tắt — Supabase đã có latency, không thêm I/O overhead
     hibernate:
       ddl-auto: none
 
-  flyway:
-    enabled: true
-
-  # Uncomment 3 dòng dưới nếu muốn chạy HOÀN TOÀN không cần DB:
-#  autoconfigure:
-#    exclude:
-#      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
-#      - org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration
-#      - org.springframework.boot.autoconfigure.data.jpa.JpaRepositoriesAutoConfiguration
+  datasource:
+    hikari:
+      maximum-pool-size: 10     # Supabase free tier giới hạn connection, giữ ở 10
+      minimum-idle: 3           # giữ ít connection hơn để tiết kiệm Supabase quota
+      connection-timeout: 30000 # Supabase cloud cần thời gian dài hơn để connect
 
 logging:
   level:
-    com.airsoft: DEBUG
+    root: INFO
+    com.airsoft: INFO           # INFO thay vì DEBUG khi dùng Supabase (ít log hơn)
+    org.springframework.security: WARN
+    org.flywaydb: INFO
