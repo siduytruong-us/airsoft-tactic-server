@@ -17,14 +17,29 @@ export interface TeamDetailDto {
   players: PlayerInTeamDto[];
 }
 
+export interface GameModeDetailDto {
+  id: string;
+  name: string;
+  description?: string | null;
+  rules?: string[] | null;
+}
+
+export interface MapSummaryDto {
+  id: string;
+  name: string;
+  coverImageUrl?: string | null;
+}
+
 export interface MatchResponseDto {
   id: string;
   fieldId: string;
   fieldName: string;
-  gameModeId: string;
-  gameModeName: string;
   status: string;
   maxPlayers: number;
+  teamCount: number;
+  respawnEnabled: boolean;
+  respawnDelaySeconds: number;
+  scheduledEndAt: string | null;
   playerCount: number;
   startedAt?: string | null;
   endedAt?: string | null;
@@ -35,4 +50,6 @@ export interface MatchResponseDto {
   canJoin: boolean;
   teams: TeamDetailDto[];
   result?: string | null;
+  gameMode: GameModeDetailDto | null;
+  map: MapSummaryDto | null;
 }

@@ -1,12 +1,15 @@
+export interface OpeningHourDto {
+  dayOfWeek: number;   // 0=Sunday, 1=Monday, ..., 6=Saturday
+  openTime: string | null;   // "08:00" hoặc null
+  closeTime: string | null;  // "18:00" hoặc null
+  isClosed: boolean;
+}
+
 export interface GameModeResponseDto {
   id: string;
   name: string;
   description?: string;
   rules?: string[];
-  maxPlayers: number;
-  teamCount: number;
-  respawnEnabled: boolean;
-  respawnDelaySeconds: number;
 }
 
 export interface TeamSummaryDto {
@@ -37,4 +40,12 @@ export interface FieldResponseDto {
   activeMatchId?: string;
   gameModes?: GameModeResponseDto[];
   currentGame?: MatchSummaryDto;
+  openingHours?: OpeningHourDto[];
+  phone?: string | null;
+  website?: string | null;
+  minAge?: number | null;
+  entryFee?: number | null;
+  entryFeeCurrency?: string;
+  rentalAvailable?: string;
+  isVerified: boolean;
 }

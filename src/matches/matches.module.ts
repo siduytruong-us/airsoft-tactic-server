@@ -8,6 +8,7 @@ import { HitEvent } from '../database/entities/hit-event.entity';
 import { PingEvent } from '../database/entities/ping-event.entity';
 import { Field } from '../database/entities/field.entity';
 import { GameMode } from '../database/entities/game-mode.entity';
+import { GameMap } from '../database/entities/map.entity';
 import { User } from '../database/entities/user.entity';
 import { PlayerStats } from '../database/entities/player-stats.entity';
 
@@ -17,6 +18,7 @@ import { JwtUtil } from '../common/utils/jwt.util';
 import { MatchesController } from './matches.controller';
 import { MatchesService } from './matches.service';
 import { AreasService } from './areas.service';
+import { MatchSchedulerService } from './match-scheduler.service';
 
 @Module({
   imports: [
@@ -28,13 +30,14 @@ import { AreasService } from './areas.service';
       PingEvent,
       Field,
       GameMode,
+      GameMap,
       User,
       PlayerStats,
     ]),
     forwardRef(() => WsModule),  // circular: WsGateway ↔ MatchesService
   ],
   controllers: [MatchesController],
-  providers: [MatchesService, AreasService, JwtUtil],
+  providers: [MatchesService, AreasService, JwtUtil, MatchSchedulerService],
   exports: [MatchesService],   // WsGateway và AdminModule cần inject
 })
 export class MatchesModule {}

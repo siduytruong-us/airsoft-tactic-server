@@ -6,10 +6,12 @@ import { GameMode } from '../database/entities/game-mode.entity';
 import { GameMatch } from '../database/entities/game-match.entity';
 import { Team } from '../database/entities/team.entity';
 import { MatchPlayer } from '../database/entities/match-player.entity';
+import { FieldHour } from '../database/entities/field-hour.entity';
 import {
   FieldResponseDto,
   GameModeResponseDto,
   MatchSummaryDto,
+  OpeningHourDto,
   TeamSummaryDto,
 } from './dto/field-response.dto';
 
@@ -28,6 +30,8 @@ export class FieldsService {
     private readonly teamRepo: Repository<Team>,
     @InjectRepository(MatchPlayer)
     private readonly matchPlayerRepo: Repository<MatchPlayer>,
+    @InjectRepository(FieldHour)
+    private readonly fieldHourRepo: Repository<FieldHour>,
   ) {}
 
   async getFields(page: number, size: number): Promise<{
@@ -108,6 +112,13 @@ export class FieldsService {
       activeMatchId: activeMatch?.id ?? undefined,
       gameModes: gameModes.map(this.toGameModeDto),
       currentGame: undefined,
+      phone: field.phone,
+      website: field.website,
+      minAge: field.minAge,
+      entryFee: field.entryFee !== null ? Number(field.entryFee) : null,
+      entryFeeCurrency: field.entryFeeCurrency,
+      rentalAvailable: field.rentalAvailable,
+      isVerified: field.isVerified,
     };
   }
 
@@ -146,6 +157,18 @@ export class FieldsService {
       };
     }
 
+    const hours = await this.fieldHourRepo.find({
+      where: { fieldId: field.id },
+      order: { dayOfWeek: 'ASC' },
+    });
+
+    const openingHours: OpeningHourDto[] = hours.map((h) => ({
+      dayOfWeek: h.dayOfWeek,
+      openTime: h.openTime ? h.openTime.substring(0, 5) : null,
+      closeTime: h.closeTime ? h.closeTime.substring(0, 5) : null,
+      isClosed: h.isClosed,
+    }));
+
     return {
       id: field.id,
       name: field.name,
@@ -158,6 +181,14 @@ export class FieldsService {
       activeMatchId: activeMatch?.id ?? undefined,
       gameModes: gameModes.map(this.toGameModeDto),
       currentGame,
+      openingHours,
+      phone: field.phone,
+      website: field.website,
+      minAge: field.minAge,
+      entryFee: field.entryFee !== null ? Number(field.entryFee) : null,
+      entryFeeCurrency: field.entryFeeCurrency,
+      rentalAvailable: field.rentalAvailable,
+      isVerified: field.isVerified,
     };
   }
 
@@ -167,10 +198,6 @@ export class FieldsService {
       name: gm.name,
       description: gm.description ?? undefined,
       rules: gm.rules ?? undefined,
-      maxPlayers: gm.maxPlayers,
-      teamCount: gm.teamCount,
-      respawnEnabled: gm.respawnEnabled,
-      respawnDelaySeconds: gm.respawnDelaySeconds,
     };
   }
 }

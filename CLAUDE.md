@@ -180,7 +180,7 @@ src/
 | `admin_accounts` | `AdminAccount` | username + bcrypt |
 | `refresh_tokens` | `RefreshToken` | UUID token, 30d expiry |
 | `device_tokens` | `DeviceToken` | FCM/APNs |
-| `fields` | `Field` | lat/lng, isActive |
+| `fields` | `Field` | lat/lng, isActive, is_verified (badge, default false, set bởi admin) |
 | `game_modes` | `GameMode` | teamCount, respawnDelaySeconds |
 | `game_matches` | `GameMatch` | WAITING→IN_PROGRESS→ENDED |
 | `teams` | `Team` | auto-created khi tạo match |
@@ -191,6 +191,7 @@ src/
 | `player_stats` | `PlayerStats` | aggregate, 1:1 với users |
 | `events` | `Event` | sự kiện/giải đấu |
 | `rsvps` | `Rsvp` | player đăng ký event |
+| `field_hours` | `FieldHour` | giờ mở cửa 7 ngày/tuần, UNIQUE(field_id, day_of_week) |
 
 **PostGIS — dùng raw SQL qua DataSource:**
 ```typescript
@@ -350,6 +351,7 @@ POST   /v1/matches/{id}/areas      body: { name, geojson }
 PUT    /v1/matches/{id}/areas/{aId}
 DELETE /v1/matches/{id}/areas/{aId}
 POST   /v1/events                  body: { fieldId, name, startAt, endAt, ... }
+PUT    /v1/admin/fields/{id}/hours body: { hours: [{ dayOfWeek, openTime, closeTime, isClosed }] }
 ```
 
 ### Response Format (bất biến)
@@ -537,6 +539,52 @@ WAITING → [admin POST /start] → IN_PROGRESS → [admin POST /end] → ENDED
 ## 12. Role Report
 
 *(Thêm vào đây sau mỗi task hoàn thành)*
+
+### 2026-06-07 — Feature: Opening Hours
+
+**Files tạo mới:**
+- `src/migrations/V11__field_hours.sql` — tạo bảng `field_hours` với UNIQUE(field_id, day_of_week), index on field_id
+- `src/database/entities/field-hour.entity.ts` — `FieldHour` entity, ManyToOne Field, columns: dayOfWeek/openTime/closeTime/isClosed
+- `src/admin/dto/update-field-hours.dto.ts` — `FieldHourItemDto` + `UpdateFieldHoursDto` với class-validator
+
+**Files sửa:**
+- `src/fields/dto/field-response.dto.ts` — thêm `OpeningHourDto` interface + `openingHours?: OpeningHourDto[]` vào `FieldResponseDto`
+- `src/fields/fields.service.ts` — inject `FieldHourRepo`, `toDetail()` load hours và map sang `OpeningHourDto[]` (format "HH:mm" qua substring(0,5))
+- `src/admin/admin-management.service.ts` — inject `FieldHourRepo`, thêm `upsertFieldHours()` (delete + re-insert strategy)
+- `src/admin/admin-field.controller.ts` — thêm `PUT fields/:id/hours` endpoint
+- `src/fields/fields.module.ts` — thêm `FieldHour` vào `TypeOrmModule.forFeature`
+- `src/admin/admin.module.ts` — thêm `FieldHour` vào `TypeOrmModule.forFeature`
+
+**Notes:**
+- `toSummary()` (GET /v1/fields list) KHÔNG load openingHours — chỉ `toDetail()` (GET /v1/fields/:id)
+- `openingHours` trả về `[]` nếu chưa set (không bao giờ null/undefined từ toDetail)
+- openTime/closeTime format "HH:mm" (Postgres TIME trả "HH:mm:ss", substring 0..5)
+- Upsert strategy: delete toàn bộ hours của field → insert lại (đơn giản hơn ON CONFLICT với UNIQUE constraint)
+
+### 2026-06-07 — Bug fix: locationUpdate missing respawnAt
+
+**Files sửa:**
+- `src/matches/matches.service.ts` — `updateLocation()`: mở rộng query isAlive để lấy thêm `respawn_at`, pass `respawnAt: string | null` vào `eventPublisher.locationUpdate()`
+
+### 2026-06-11 — Field Verified Badge
+
+**Files tạo mới:**
+- `src/migrations/V15__field_verified.sql` — `ALTER TABLE fields ADD COLUMN IF NOT EXISTS is_verified BOOLEAN NOT NULL DEFAULT false`
+
+**Files sửa:**
+- `src/database/entities/field.entity.ts` — thêm `isVerified: boolean` column (`is_verified`, default false)
+- `src/fields/dto/field-response.dto.ts` — thêm `isVerified: boolean` vào `FieldResponseDto`
+- `src/fields/fields.service.ts` — `toSummary()` và `toDetail()` map `isVerified: field.isVerified`
+- `src/admin/dto/update-field.dto.ts` — thêm `@IsBoolean() @IsOptional() isVerified?: boolean`
+- `src/admin/admin-management.service.ts` — `FieldResponseDto` interface thêm `isVerified: boolean`; `updateField()` set `field.isVerified` nếu dto có giá trị; `toFieldDto()` map `isVerified: f.isVerified`
+
+**Notes:**
+- `CreateFieldDto` KHÔNG có `isVerified` — field mới luôn default false, chỉ admin update sau khi tạo mới set verified
+- GET /v1/fields, /v1/fields/:id và admin field DTO đều trả về `isVerified`
+
+**Notes:**
+- Lỗi TS2345: `locationUpdate()` yêu cầu `respawnAt` nhưng caller không truyền
+- Fix: join thêm subquery lấy `respawn_at` của active hit event trong cùng 1 query, convert sang ISO string hoặc null
 
 ### 2026-06-07 — Enhanced Hit Flow (server side)
 

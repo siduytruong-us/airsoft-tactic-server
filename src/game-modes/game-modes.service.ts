@@ -8,10 +8,6 @@ export interface GameModeDto {
   name: string;
   description?: string;
   rules?: string[];
-  maxPlayers: number;
-  teamCount: number;
-  respawnEnabled: boolean;
-  respawnDelaySeconds: number;
 }
 
 @Injectable()
@@ -39,10 +35,6 @@ export class GameModesService {
       name: gm.name,
       description: gm.description ?? undefined,
       rules: gm.rules ?? undefined,
-      maxPlayers: gm.maxPlayers,
-      teamCount: gm.teamCount,
-      respawnEnabled: gm.respawnEnabled,
-      respawnDelaySeconds: gm.respawnDelaySeconds,
     };
   }
 }

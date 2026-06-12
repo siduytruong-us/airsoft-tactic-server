@@ -1,4 +1,5 @@
 import {
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
@@ -13,11 +14,15 @@ import { Team } from '../database/entities/team.entity';
 import { User } from '../database/entities/user.entity';
 import { MatchPlayer } from '../database/entities/match-player.entity';
 import { PlayerStats } from '../database/entities/player-stats.entity';
+import { GameMap } from '../database/entities/map.entity';
+import { FieldHour } from '../database/entities/field-hour.entity';
+import { OpeningHourDto } from '../fields/dto/field-response.dto';
 import { CreateFieldDto } from './dto/create-field.dto';
 import { UpdateFieldDto } from './dto/update-field.dto';
 import { CreateGameModeDto } from './dto/create-game-mode.dto';
 import { UpdateUserRoleDto } from './dto/update-user-role.dto';
 import { AdminStatsDto } from './dto/admin-stats.dto';
+import { FieldHourItemDto } from './dto/update-field-hours.dto';
 
 const TEAM_NAMES = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot'];
 const TEAM_COLORS = ['#3B82F6', '#EF4444', '#22C55E', '#F59E0B', '#8B5CF6', '#EC4899'];
@@ -32,33 +37,57 @@ export interface FieldResponseDto {
   lng: number | null;
   isActive: boolean;
   createdAt: Date;
+  phone: string | null;
+  website: string | null;
+  minAge: number | null;
+  entryFee: number | null;
+  entryFeeCurrency: string;
+  rentalAvailable: string;
+  isVerified: boolean;
 }
 
 export interface GameModeResponseDto {
   id: string;
-  fieldId: string;
+  fieldId: string | null;
   name: string;
   description: string | null;
   rules: string[] | null;
-  maxPlayers: number;
-  teamCount: number;
-  respawnEnabled: boolean;
-  respawnDelaySeconds: number;
-  createdAt: Date;
+}
+
+export interface TeamSummaryDto {
+  id: string;
+  name: string;
+  colorHex: string;
 }
 
 export interface MatchResponseDto {
   id: string;
   fieldId: string;
   gameModeId: string;
+  gameModeName: string | null;
   createdById: string;
   createdByDisplayName: string;
   status: string;
   maxPlayers: number;
+  teamCount: number;
+  respawnEnabled: boolean;
+  respawnDelaySeconds: number;
+  scheduledEndAt: Date | null;
+  mapId: string | null;
+  mapName: string | null;
   startedAt: Date | null;
   endedAt: Date | null;
   winningTeamId: string | null;
   createdAt: Date;
+  teams: TeamSummaryDto[];
+}
+
+export interface UpdateMatchDto {
+  maxPlayers?: number;
+  respawnEnabled?: boolean;
+  respawnDelaySeconds?: number;
+  scheduledEndAt?: string | null;
+  mapId?: string | null;
 }
 
 export interface UserSummaryDto {
@@ -80,7 +109,12 @@ export interface PageResponseDto<T> {
 export interface CreateMatchDto {
   fieldId: string;
   gameModeId: string;
-  maxPlayers?: number;
+  maxPlayers: number;
+  teamCount: number;
+  respawnEnabled: boolean;
+  respawnDelaySeconds: number;
+  scheduledEndAt?: string;
+  mapId?: string;
 }
 
 export interface EndMatchDto {
@@ -106,6 +140,10 @@ export class AdminManagementService {
     private readonly matchPlayerRepo: Repository<MatchPlayer>,
     @InjectRepository(PlayerStats)
     private readonly playerStatsRepo: Repository<PlayerStats>,
+    @InjectRepository(GameMap)
+    private readonly mapRepo: Repository<GameMap>,
+    @InjectRepository(FieldHour)
+    private readonly fieldHourRepo: Repository<FieldHour>,
   ) {}
 
   // ── Fields ──────────────────────────────────────────────────────────
@@ -124,6 +162,12 @@ export class AdminManagementService {
       lng: dto.lng ?? null,
       coverImageUrl: dto.coverImageUrl ?? null,
       isActive: dto.isActive ?? true,
+      phone: dto.phone ?? null,
+      website: dto.website ?? null,
+      minAge: dto.minAge ?? null,
+      entryFee: dto.entryFee ?? null,
+      entryFeeCurrency: dto.entryFeeCurrency ?? 'USD',
+      rentalAvailable: dto.rentalAvailable ?? 'unknown',
     });
     const saved = await this.fieldRepo.save(field);
     return this.toFieldDto(saved);
@@ -146,6 +190,13 @@ export class AdminManagementService {
     if (dto.lng !== undefined) field.lng = dto.lng ?? null;
     if (dto.coverImageUrl !== undefined) field.coverImageUrl = dto.coverImageUrl ?? null;
     if (dto.isActive !== undefined) field.isActive = dto.isActive;
+    if (dto.phone !== undefined) field.phone = dto.phone ?? null;
+    if (dto.website !== undefined) field.website = dto.website ?? null;
+    if (dto.minAge !== undefined) field.minAge = dto.minAge ?? null;
+    if (dto.entryFee !== undefined) field.entryFee = dto.entryFee ?? null;
+    if (dto.entryFeeCurrency !== undefined) field.entryFeeCurrency = dto.entryFeeCurrency;
+    if (dto.rentalAvailable !== undefined) field.rentalAvailable = dto.rentalAvailable;
+    if (dto.isVerified !== undefined) field.isVerified = dto.isVerified;
 
     const saved = await this.fieldRepo.save(field);
     return this.toFieldDto(saved);
@@ -156,6 +207,36 @@ export class AdminManagementService {
     if (!field) throw new NotFoundException(`Field not found: ${fieldId}`);
     field.isActive = false;
     await this.fieldRepo.save(field);
+  }
+
+  // ── Field Hours ──────────────────────────────────────────────────────
+
+  async upsertFieldHours(fieldId: string, hours: FieldHourItemDto[]): Promise<OpeningHourDto[]> {
+    const field = await this.fieldRepo.findOne({ where: { id: fieldId } });
+    if (!field) throw new NotFoundException(`Field not found: ${fieldId}`);
+
+    // Delete existing then insert (simpler than upsert with UNIQUE constraint)
+    await this.fieldHourRepo.delete({ fieldId });
+
+    const entities = hours.map((h) =>
+      this.fieldHourRepo.create({
+        fieldId,
+        dayOfWeek: h.dayOfWeek,
+        openTime: h.openTime ?? null,
+        closeTime: h.closeTime ?? null,
+        isClosed: h.isClosed,
+      }),
+    );
+
+    const saved = await this.fieldHourRepo.save(entities);
+    return saved
+      .sort((a, b) => a.dayOfWeek - b.dayOfWeek)
+      .map((h) => ({
+        dayOfWeek: h.dayOfWeek,
+        openTime: h.openTime ? h.openTime.substring(0, 5) : null,
+        closeTime: h.closeTime ? h.closeTime.substring(0, 5) : null,
+        isClosed: h.isClosed,
+      }));
   }
 
   // ── Game Modes ───────────────────────────────────────────────────────
@@ -170,11 +251,19 @@ export class AdminManagementService {
       name: dto.name,
       description: dto.description ?? null,
       rules: dto.rules ?? null,
-      maxPlayers: dto.maxPlayers,
-      teamCount: dto.teamCount,
-      respawnEnabled: dto.respawnEnabled ?? true,
-      respawnDelaySeconds: dto.respawnDelaySeconds ?? 30,
     });
+    const saved = await this.gameModeRepo.save(gm);
+    return this.toGameModeDto(saved);
+  }
+
+  async updateGameMode(fieldId: string, gameModeId: string, dto: CreateGameModeDto): Promise<GameModeResponseDto> {
+    const gm = await this.gameModeRepo.findOne({ where: { id: gameModeId, fieldId } });
+    if (!gm) throw new NotFoundException(`GameMode not found: ${gameModeId}`);
+
+    if (dto.name !== undefined) gm.name = dto.name;
+    if (dto.description !== undefined) gm.description = dto.description ?? null;
+    if (dto.rules !== undefined) gm.rules = dto.rules ?? null;
+
     const saved = await this.gameModeRepo.save(gm);
     return this.toGameModeDto(saved);
   }
@@ -186,8 +275,69 @@ export class AdminManagementService {
   }
 
   async getMatchesByField(fieldId: string): Promise<MatchResponseDto[]> {
-    const matches = await this.matchRepo.find({ where: { fieldId } });
-    return matches.map((m) => this.toMatchDto(m));
+    const matches = await this.matchRepo.find({
+      where: { fieldId },
+      order: { createdAt: 'DESC' },
+    });
+    if (matches.length === 0) return [];
+
+    // Batch load gameModes + teams + maps
+    const gameModeIds = [...new Set(matches.map(m => m.gameModeId).filter(Boolean))];
+    const mapIds = [...new Set(matches.map(m => m.mapId).filter((id): id is string => !!id))];
+    const matchIds = matches.map(m => m.id);
+
+    const [gameModes, maps, teams] = await Promise.all([
+      gameModeIds.length
+        ? this.gameModeRepo.findByIds(gameModeIds)
+        : Promise.resolve([]),
+      mapIds.length
+        ? this.mapRepo.findByIds(mapIds)
+        : Promise.resolve([]),
+      this.teamRepo.find({ where: matchIds.map(id => ({ matchId: id })) }),
+    ]);
+
+    const gameModeMap = new Map(gameModes.map(gm => [gm.id, gm.name]));
+    const mapNameMap = new Map(maps.map(m => [m.id, m.name]));
+    const teamsByMatch = new Map<string, Team[]>();
+    for (const t of teams) {
+      const list = teamsByMatch.get(t.matchId) ?? [];
+      list.push(t);
+      teamsByMatch.set(t.matchId, list);
+    }
+
+    return matches.map(m => this.toMatchDto(m, gameModeMap, mapNameMap, teamsByMatch));
+  }
+
+  async deleteMatch(matchId: string): Promise<void> {
+    const match = await this.matchRepo.findOne({ where: { id: matchId } });
+    if (!match) throw new NotFoundException(`Match not found: ${matchId}`);
+    if (match.status !== 'ENDED') {
+      throw new ForbiddenException('Only ENDED matches can be deleted');
+    }
+    await this.matchRepo.delete({ id: matchId });
+  }
+
+  async updateMatch(matchId: string, dto: UpdateMatchDto): Promise<MatchResponseDto> {
+    const match = await this.matchRepo.findOne({ where: { id: matchId } });
+    if (!match) throw new NotFoundException(`Match not found: ${matchId}`);
+    if (match.status === 'ENDED') {
+      throw new ForbiddenException('Cannot update an ENDED match');
+    }
+
+    if (dto.maxPlayers !== undefined) match.maxPlayers = dto.maxPlayers;
+    if (dto.respawnEnabled !== undefined) match.respawnEnabled = dto.respawnEnabled;
+    if (dto.respawnDelaySeconds !== undefined) match.respawnDelaySeconds = dto.respawnDelaySeconds;
+    if (dto.scheduledEndAt !== undefined) {
+      match.scheduledEndAt = dto.scheduledEndAt ? new Date(dto.scheduledEndAt) : null;
+    }
+    if (dto.mapId !== undefined) match.mapId = dto.mapId;
+
+    const saved = await this.matchRepo.save(match);
+    const gameModeMap = new Map([[saved.gameModeId, (await this.gameModeRepo.findOne({ where: { id: saved.gameModeId } }))?.name ?? null]]);
+    const mapNameMap = new Map(saved.mapId ? [[saved.mapId, (await this.mapRepo.findOne({ where: { id: saved.mapId } }))?.name ?? null]] : []);
+    const teams = await this.teamRepo.find({ where: { matchId: saved.id } });
+    const teamsByMatch = new Map([[saved.id, teams]]);
+    return this.toMatchDto(saved, gameModeMap as Map<string, string>, mapNameMap as Map<string, string>, teamsByMatch);
   }
 
   // ── Matches ──────────────────────────────────────────────────────────
@@ -211,12 +361,17 @@ export class AdminManagementService {
       createdById: adminId,
       createdByDisplayName: adminDisplayName,
       status: 'WAITING',
-      maxPlayers: dto.maxPlayers ?? gameMode.maxPlayers,
+      maxPlayers: dto.maxPlayers,
+      teamCount: dto.teamCount,
+      respawnEnabled: dto.respawnEnabled,
+      respawnDelaySeconds: dto.respawnDelaySeconds,
+      scheduledEndAt: dto.scheduledEndAt ? new Date(dto.scheduledEndAt) : null,
+      mapId: dto.mapId ?? null,
     });
     const savedMatch = await this.matchRepo.save(match);
 
     // Auto-create N teams
-    const teamCount = Math.min(gameMode.teamCount, TEAM_NAMES.length);
+    const teamCount = Math.min(dto.teamCount, TEAM_NAMES.length);
     const teams = Array.from({ length: teamCount }, (_, i) =>
       this.teamRepo.create({
         matchId: savedMatch.id,
@@ -367,6 +522,13 @@ export class AdminManagementService {
       lng: f.lng,
       isActive: f.isActive,
       createdAt: f.createdAt,
+      phone: f.phone,
+      website: f.website,
+      minAge: f.minAge,
+      entryFee: f.entryFee !== null ? Number(f.entryFee) : null,
+      entryFeeCurrency: f.entryFeeCurrency ?? 'USD',
+      rentalAvailable: f.rentalAvailable ?? 'unknown',
+      isVerified: f.isVerified,
     };
   }
 
@@ -377,27 +539,36 @@ export class AdminManagementService {
       name: gm.name,
       description: gm.description,
       rules: gm.rules,
-      maxPlayers: gm.maxPlayers,
-      teamCount: gm.teamCount,
-      respawnEnabled: gm.respawnEnabled,
-      respawnDelaySeconds: gm.respawnDelaySeconds,
-      createdAt: gm.createdAt,
     };
   }
 
-  private toMatchDto(m: GameMatch): MatchResponseDto {
+  private toMatchDto(
+    m: GameMatch,
+    gameModeMap: Map<string, string | null> = new Map(),
+    mapNameMap: Map<string, string | null> = new Map(),
+    teamsByMatch: Map<string, Team[]> = new Map(),
+  ): MatchResponseDto {
+    const teams = teamsByMatch.get(m.id) ?? [];
     return {
       id: m.id,
       fieldId: m.fieldId,
       gameModeId: m.gameModeId,
+      gameModeName: gameModeMap.get(m.gameModeId) ?? null,
       createdById: m.createdById,
       createdByDisplayName: m.createdByDisplayName,
       status: m.status,
       maxPlayers: m.maxPlayers,
+      teamCount: m.teamCount,
+      respawnEnabled: m.respawnEnabled,
+      respawnDelaySeconds: m.respawnDelaySeconds,
+      scheduledEndAt: m.scheduledEndAt,
+      mapId: m.mapId,
+      mapName: m.mapId ? (mapNameMap.get(m.mapId) ?? null) : null,
       startedAt: m.startedAt,
       endedAt: m.endedAt,
       winningTeamId: m.winningTeamId,
       createdAt: m.createdAt,
+      teams: teams.map(t => ({ id: t.id, name: t.name, colorHex: t.colorHex })),
     };
   }
 

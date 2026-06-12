@@ -16,6 +16,7 @@ import { MatchPlayer } from '../database/entities/match-player.entity';
 import { User } from '../database/entities/user.entity';
 import { Field } from '../database/entities/field.entity';
 import { GameMode } from '../database/entities/game-mode.entity';
+import { GameMap } from '../database/entities/map.entity';
 import { HitEvent } from '../database/entities/hit-event.entity';
 import { PlayerStats } from '../database/entities/player-stats.entity';
 
@@ -26,6 +27,8 @@ import {
   MatchResponseDto,
   TeamDetailDto,
   PlayerInTeamDto,
+  GameModeDetailDto,
+  MapSummaryDto,
 } from './dto/match-response.dto';
 
 const TEAM_NAMES  = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot'] as const;
@@ -79,6 +82,9 @@ export class MatchesService {
     @InjectRepository(GameMode)
     private readonly gameModeRepo: Repository<GameMode>,
 
+    @InjectRepository(GameMap)
+    private readonly mapRepo: Repository<GameMap>,
+
     @InjectRepository(HitEvent)
     private readonly hitEventRepo: Repository<HitEvent>,
 
@@ -99,13 +105,18 @@ export class MatchesService {
     }) as GameMatchFull | null;
     if (!match) throw new NotFoundException(`Match not found: ${matchId}`);
 
-    const teams = await this.teamRepo.find({ where: { matchId } });
-    const allPlayers = await this.matchPlayerRepo.find({
-      where: { matchId },
-      relations: ['user'],
-    }) as MatchPlayerFull[];
+    const [teams, allPlayers, map] = await Promise.all([
+      this.teamRepo.find({ where: { matchId } }),
+      this.matchPlayerRepo.find({
+        where: { matchId },
+        relations: ['user'],
+      }) as Promise<MatchPlayerFull[]>,
+      match.mapId
+        ? this.mapRepo.findOne({ where: { id: match.mapId } })
+        : Promise.resolve(null),
+    ]);
 
-    return this.buildMatchResponse(match, teams, allPlayers, userId);
+    return this.buildMatchResponse(match, teams, allPlayers, userId, map ?? null);
   }
 
   // ─── getActiveMatch ──────────────────────────────────────────────────────────
@@ -267,7 +278,6 @@ export class MatchesService {
   ): Promise<{ id: string; matchId: string; userId: string; reportedAt: string; respawnAt: string }> {
     const match = await this.matchRepo.findOne({
       where: { id: matchId },
-      relations: ['gameMode'],
     });
     if (!match) throw new NotFoundException('Match not found');
     if (match.status !== 'IN_PROGRESS') {
@@ -277,8 +287,7 @@ export class MatchesService {
       });
     }
 
-    const fullMatch = match as GameMatchFull;
-    const delay = fullMatch.gameMode.respawnDelaySeconds;
+    const delay = match.respawnDelaySeconds;
 
     // Idempotency check — return existing if within respawn window
     const existing = await this.dataSource.query<HitEventRow[]>(
@@ -339,17 +348,24 @@ export class MatchesService {
     if (!user) return;
 
     // isAlive: no active hit event with respawn_at > NOW()
-    const hitRows = await this.dataSource.query<IsAliveRow[]>(
-      `SELECT EXISTS(
-         SELECT 1 FROM hit_events
-         WHERE match_id = $1 AND user_id = $2 AND respawn_at > NOW()
-       ) AS exists`,
+    const hitRows = await this.dataSource.query<{ exists: boolean | string; respawn_at: string | null }[]>(
+      `SELECT
+         EXISTS(
+           SELECT 1 FROM hit_events
+           WHERE match_id = $1 AND user_id = $2 AND respawn_at > NOW()
+         ) AS exists,
+         (SELECT respawn_at::text FROM hit_events
+          WHERE match_id = $1 AND user_id = $2 AND respawn_at > NOW()
+          ORDER BY respawn_at DESC LIMIT 1) AS respawn_at`,
       [matchId, userId],
     );
     // pg returns 't'/'f' string or boolean depending on driver
     const existsVal = hitRows[0]?.exists;
     const isDead    = existsVal === true || existsVal === 't' || existsVal === 'true';
     const isAlive   = !isDead;
+    const respawnAt = hitRows[0]?.respawn_at
+      ? new Date(hitRows[0].respawn_at).toISOString()
+      : null;
 
     this.eventPublisher.locationUpdate({
       matchId,
@@ -359,6 +375,7 @@ export class MatchesService {
       latitude,
       longitude,
       isAlive,
+      respawnAt,
     });
   }
 
@@ -438,13 +455,18 @@ export class MatchesService {
       gameModeId:           dto.gameModeId,
       createdById:          adminId,
       createdByDisplayName: adminDisplayName,
-      maxPlayers:           gameMode.maxPlayers,
+      maxPlayers:           dto.maxPlayers,
+      teamCount:            dto.teamCount,
+      respawnEnabled:       dto.respawnEnabled,
+      respawnDelaySeconds:  dto.respawnDelaySeconds,
+      scheduledEndAt:       dto.scheduledEndAt ? new Date(dto.scheduledEndAt) : null,
+      mapId:                dto.mapId ?? null,
       status:               'WAITING',
     });
     const savedMatch = await this.matchRepo.save(match);
 
     // Auto-create N teams — bulk insert instead of sequential saves
-    const teamsToCreate = Array.from({ length: gameMode.teamCount }, (_, i) => {
+    const teamsToCreate = Array.from({ length: dto.teamCount }, (_, i) => {
       const teamName = TEAM_NAMES[i % TEAM_NAMES.length];
       return this.teamRepo.create({
         matchId:     savedMatch.id,
@@ -454,6 +476,16 @@ export class MatchesService {
       });
     });
     await this.teamRepo.save(teamsToCreate);
+
+    // If mapId provided, copy map_areas → game_areas
+    if (dto.mapId) {
+      await this.dataSource.query(
+        `INSERT INTO game_areas (id, match_id, name, description, color_hex, area_type, polygon)
+         SELECT gen_random_uuid(), $1, name, description, color_hex, area_type, boundary
+         FROM map_areas WHERE map_id = $2`,
+        [savedMatch.id, dto.mapId],
+      );
+    }
 
     return this.getMatch(savedMatch.id, adminId);
   }
@@ -488,7 +520,7 @@ export class MatchesService {
 
   // ─── Private helpers ─────────────────────────────────────────────────────────
 
-  // Load N matches in 3 queries (matches + teams + players) instead of N×3 queries.
+  // Load N matches in 4 queries (matches + teams + players + maps) instead of N×4 queries.
   private async batchLoadMatches(matchIds: string[], userId?: string): Promise<MatchResponseDto[]> {
     const [matches, teams, players] = await Promise.all([
       this.matchRepo.find({
@@ -501,6 +533,16 @@ export class MatchesService {
         relations: ['user'],
       }) as Promise<MatchPlayerFull[]>,
     ]);
+
+    // Batch fetch maps (name + coverImageUrl) for matches that have mapId
+    const mapIds = [...new Set(matches.map(m => m.mapId).filter((id): id is string => id !== null))];
+    const mapByIdMap = new Map<string, GameMap>();
+    if (mapIds.length > 0) {
+      const mapEntities = await this.mapRepo.findByIds(mapIds);
+      for (const m of mapEntities) {
+        mapByIdMap.set(m.id, m);
+      }
+    }
 
     const matchMap    = new Map(matches.map(m => [m.id, m]));
     const teamsByMatch   = new Map<string, Team[]>();
@@ -519,12 +561,16 @@ export class MatchesService {
 
     return matchIds
       .filter(id => matchMap.has(id))
-      .map(id => this.buildMatchResponse(
-        matchMap.get(id)!,
-        teamsByMatch.get(id) ?? [],
-        playersByMatch.get(id) ?? [],
-        userId,
-      ));
+      .map(id => {
+        const m = matchMap.get(id)!;
+        return this.buildMatchResponse(
+          m,
+          teamsByMatch.get(id) ?? [],
+          playersByMatch.get(id) ?? [],
+          userId,
+          m.mapId ? (mapByIdMap.get(m.mapId) ?? null) : null,
+        );
+      });
   }
 
   private buildMatchResponse(
@@ -532,6 +578,7 @@ export class MatchesService {
     teams: Team[],
     allPlayers: MatchPlayerFull[],
     userId?: string,
+    map: GameMap | null = null,
   ): MatchResponseDto {
     const playersByTeam = new Map<string, MatchPlayerFull[]>();
     for (const mp of allPlayers) {
@@ -572,24 +619,36 @@ export class MatchesService {
       ? teams.find(t => t.id === match.winningTeamId)
       : undefined;
 
+    const gameModeDetail: GameModeDetailDto | null = match.gameMode
+      ? { id: match.gameMode.id, name: match.gameMode.name, description: match.gameMode.description ?? null, rules: match.gameMode.rules ?? null }
+      : null;
+
+    const mapSummary: MapSummaryDto | null = map
+      ? { id: map.id, name: map.name, coverImageUrl: map.coverImageUrl ?? null }
+      : null;
+
     return {
-      id:              match.id,
-      fieldId:         match.fieldId,
-      fieldName:       match.field?.name ?? '',
-      gameModeId:      match.gameModeId,
-      gameModeName:    match.gameMode?.name ?? '',
-      status:          match.status,
-      maxPlayers:      match.maxPlayers,
-      playerCount:     allPlayers.length,
-      startedAt:       match.startedAt?.toISOString() ?? null,
-      endedAt:         match.endedAt?.toISOString() ?? null,
-      winningTeamId:   match.winningTeamId,
-      winningTeamName: winningTeam?.name ?? null,
+      id:                  match.id,
+      fieldId:             match.fieldId,
+      fieldName:           match.field?.name ?? '',
+      status:              match.status,
+      maxPlayers:          match.maxPlayers,
+      teamCount:           match.teamCount,
+      respawnEnabled:      match.respawnEnabled,
+      respawnDelaySeconds: match.respawnDelaySeconds,
+      scheduledEndAt:      match.scheduledEndAt?.toISOString() ?? null,
+      playerCount:         allPlayers.length,
+      startedAt:           match.startedAt?.toISOString() ?? null,
+      endedAt:             match.endedAt?.toISOString() ?? null,
+      winningTeamId:       match.winningTeamId,
+      winningTeamName:     winningTeam?.name ?? null,
       durationSeconds,
-      myTeamId:        myMp?.teamId ?? null,
-      canJoin:         match.status === 'WAITING',
-      teams:           teamDetails,
-      result:          null,
+      myTeamId:            myMp?.teamId ?? null,
+      canJoin:             match.status === 'WAITING',
+      teams:               teamDetails,
+      result:              null,
+      gameMode:            gameModeDetail,
+      map:                 mapSummary,
     };
   }
 

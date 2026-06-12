@@ -49,6 +49,21 @@ export class GameMatch {
   @Column({ name: 'winning_team_id', type: 'uuid', nullable: true })
   winningTeamId!: string | null;
 
+  @Column({ name: 'team_count', type: 'int', default: 2 })
+  teamCount!: number;
+
+  @Column({ name: 'respawn_enabled', type: 'boolean', default: true })
+  respawnEnabled!: boolean;
+
+  @Column({ name: 'respawn_delay_seconds', type: 'int', default: 30 })
+  respawnDelaySeconds!: number;
+
+  @Column({ name: 'scheduled_end_at', type: 'timestamptz', nullable: true })
+  scheduledEndAt!: Date | null;
+
+  @Column({ name: 'map_id', type: 'uuid', nullable: true })
+  mapId!: string | null;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt!: Date;
 }
