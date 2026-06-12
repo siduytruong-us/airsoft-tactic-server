@@ -8,6 +8,10 @@
     "start:dev": "nodemon",
     "start:debug": "nodemon --inspect",
     "start:prod": "node dist/main",
+    "start:staging": "NODE_ENV=staging node dist/main",
+    "start:production": "NODE_ENV=production node dist/main",
+    "build:staging": "NODE_ENV=staging tsc -p tsconfig.json",
+    "build:production": "NODE_ENV=production tsc -p tsconfig.json",
     "lint": "eslint src --ext .ts",
     "format": "prettier --write src/**/*.ts"
   },

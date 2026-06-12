@@ -23,9 +23,14 @@ async function bootstrap() {
     }),
   );
 
-  // CORS
+  // CORS — CORS_ORIGIN supports a comma-separated list (e.g. staging + production admin URLs)
+  const corsOrigins = (process.env.CORS_ORIGIN ?? 'http://localhost:3000')
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean);
+
   app.enableCors({
-    origin: process.env.CORS_ORIGIN ?? 'http://localhost:3000',
+    origin: corsOrigins,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['*'],
     credentials: true,

@@ -19,7 +19,13 @@ import { HealthController } from './health/health.controller';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: ['.env.local', '.env'],
+      // NODE_ENV-based env file selection:
+      //   NODE_ENV=staging    -> .env.staging
+      //   NODE_ENV=production -> .env.production
+      //   (default/local)     -> .env.local, then .env
+      envFilePath: process.env.NODE_ENV
+        ? [`.env.${process.env.NODE_ENV}.local`, `.env.${process.env.NODE_ENV}`, '.env.local', '.env']
+        : ['.env.local', '.env'],
     }),
     DatabaseModule,
     WsModule,

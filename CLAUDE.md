@@ -445,6 +445,18 @@ DB_PORT=5432
 NODE_ENV=local
 ```
 
+### Staging / Production
+
+2 environments, cùng point đến 1 production Supabase project (budget setup).
+`ConfigModule.forRoot` chọn env file theo `NODE_ENV`:
+`NODE_ENV=staging` → `.env.staging` (+ `.env.staging.local`), `NODE_ENV=production` → `.env.production`
+(+ `.env.production.local`), fallback `.env.local`/`.env`.
+
+- `.env.staging.example` / `.env.production.example` — templates (copy → `.env.staging` / `.env.production`, không commit).
+- `CORS_ORIGIN` hỗ trợ comma-separated list (nhiều admin origin).
+- Scripts: `npm run start:staging` / `start:production`, `build:staging` / `build:production`.
+- Staging CORS_ORIGIN mặc định: `https://admin-staging.airtac.app`; Production: `https://admin.airtac.app`.
+
 ---
 
 ## 9. Development Setup
