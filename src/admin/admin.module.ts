@@ -19,6 +19,7 @@ import { GameMap } from '../database/entities/map.entity';
 import { MapArea } from '../database/entities/map-area.entity';
 import { FieldHour } from '../database/entities/field-hour.entity';
 import { JwtUtil } from '../common/utils/jwt.util';
+import { UploadsModule } from '../uploads/uploads.module';
 
 @Module({
   imports: [
@@ -35,6 +36,7 @@ import { JwtUtil } from '../common/utils/jwt.util';
       MapArea,
       FieldHour,
     ]),
+    UploadsModule,
   ],
   controllers: [AdminAuthController, AdminFieldController, AdminUserController, MapsController],
   providers: [AdminAuthService, AdminManagementService, MapsService, JwtUtil],

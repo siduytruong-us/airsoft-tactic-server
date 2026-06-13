@@ -1,6 +1,6 @@
 # CLAUDE.md — AirsoftTac Node.js Server
 > Migrated from Spring Boot 3.3.4 (Kotlin) → NestJS 10 (TypeScript)
-> Last updated: 2026-06-07
+> Last updated: 2026-06-12
 
 ## Role
 Bạn là **senior Node.js backend developer** chuyên về:
@@ -352,6 +352,8 @@ PUT    /v1/matches/{id}/areas/{aId}
 DELETE /v1/matches/{id}/areas/{aId}
 POST   /v1/events                  body: { fieldId, name, startAt, endAt, ... }
 PUT    /v1/admin/fields/{id}/hours body: { hours: [{ dayOfWeek, openTime, closeTime, isClosed }] }
+POST   /v1/admin/fields/{id}/cover-image  multipart/form-data, field "file" → { coverImageUrl }
+POST   /v1/admin/maps/{id}/cover-image    multipart/form-data, field "file" → { coverImageUrl }
 ```
 
 ### Response Format (bất biến)
@@ -419,12 +421,17 @@ interface ApiResponse<T> {
 ## 8. Environment Variables
 
 ```env
-# Database
-DB_HOST=localhost
-DB_PORT=5432
+# Database — luôn là Supabase Postgres (không có local DB, kể cả khi dev local)
+# Dùng IPv4 transaction pooler (Supavisor) — direct host db.<ref>.supabase.co là
+# IPv6-only và ECONNREFUSED trên network IPv4-only. Lấy connection string từ
+# Supabase Dashboard > Connect > ORM.
+DB_HOST=aws-1-us-east-1.pooler.supabase.com
+DB_PORT=6543
 DB_NAME=postgres
-DB_USER=postgres
-DB_PASSWORD=
+DB_USER=postgres.<project-ref>
+DB_PASSWORD=<supabase-db-password>
+# Supabase Postgres yêu cầu SSL. Mặc định true, chỉ set false nếu thật cần.
+DB_SSL=true
 
 # JWT (cùng secret với Spring Boot — token cũ vẫn valid)
 JWT_SECRET=<SUPABASE_JWT_SECRET>
@@ -438,12 +445,9 @@ NODE_ENV=local
 CORS_ORIGIN=http://localhost:3000
 ```
 
-**`.env.local`** override cho Docker PostgreSQL local:
-```env
-DB_HOST=localhost
-DB_PORT=5432
-NODE_ENV=local
-```
+`DB_HOST`/`DB_PORT`/`DB_NAME`/`DB_USER`/`DB_SSL` đều có default trong `database.module.ts`
+(default host = production Supabase project), nên `.env.local` chỉ cần set `DB_PASSWORD`
+(lấy từ Supabase Dashboard > Project Settings > Database > Connection string).
 
 ### Staging / Production
 
@@ -457,13 +461,47 @@ NODE_ENV=local
 - Scripts: `npm run start:staging` / `start:production`, `build:staging` / `build:production`.
 - Staging CORS_ORIGIN mặc định: `https://admin-staging.airtac.app`; Production: `https://admin.airtac.app`.
 
+### Supabase Storage (server-side upload proxy)
+
+```env
+# Project URL + service_role key — dùng cho server-side cover image upload proxy
+# SUPABASE_SERVICE_ROLE_KEY KHÔNG BAO GIỜ expose ra client (khác với NEXT_PUBLIC_SUPABASE_ANON_KEY ở admin)
+SUPABASE_URL=https://<project-ref>.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=<service-role-secret>
+```
+
+- Set cho staging + production qua `flyctl secrets set -c fly.staging.toml SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=...` (tương tự `-c fly.production.toml`)
+- Buckets hiện có trên Supabase: `field-covers`, `map-covers` (public read, upload qua service_role)
+- Object key xác định theo entity: `field-{fieldId}.{ext}`, `map-{mapId}.{ext}` — upload với `x-upsert: true` để tự đè ảnh cũ
+
+### Deploy — Fly.io
+
+- 2 Fly apps, mỗi app = 1 environment: `airsoft-tactic-server-staging`, `airsoft-tactic-server-production`
+- Config: `fly.staging.toml` / `fly.production.toml` (region `sin`, `shared-cpu-1x`/256mb, `min_machines_running = 1` để giữ WebSocket connections sống)
+- `[build]` dùng `Dockerfile` hiện có — không cần thay đổi
+- Secrets (DB_*, JWT_SECRET, CORS_ORIGIN...) set qua `flyctl secrets set -c fly.staging.toml KEY=value` (không dùng `.env` file trong image)
+- CI/CD: `.github/workflows/deploy.yml`
+  - **build-and-test**: luôn chạy (lint + build + test)
+  - **deploy-staging**: auto khi push `develop`, hoặc `workflow_dispatch` với `environment=staging`
+  - **deploy-production**: CHỈ chạy qua `workflow_dispatch` với `environment=production` (manual)
+  - Cần GitHub secret `FLY_API_TOKEN` (tạo bằng `flyctl tokens create deploy -x 999999h`), set trong Settings → Environments → staging & production
+- Setup lần đầu (1 lần per app):
+  ```bash
+  flyctl auth login
+  flyctl apps create airsoft-tactic-server-staging
+  flyctl apps create airsoft-tactic-server-production
+  flyctl secrets set -c fly.staging.toml DB_HOST=... DB_PASSWORD=... JWT_SECRET=... CORS_ORIGIN=...
+  flyctl secrets set -c fly.production.toml DB_HOST=... DB_PASSWORD=... JWT_SECRET=... CORS_ORIGIN=...
+  ```
+- Domain: gắn custom domain qua `flyctl certs add api-staging.airtac.app -c fly.staging.toml` (tương tự cho production)
+
 ---
 
 ## 9. Development Setup
 
 ```bash
-# Khởi động Docker PostgreSQL (nếu dùng local)
-cd airsoft-tactic-server && docker compose up -d
+# Không cần DB local — server luôn connect Supabase Postgres.
+# Chỉ cần set DB_PASSWORD (Supabase) trong .env.local trước khi chạy.
 
 # Install dependencies
 cd airsoft-tactic-nodejs
@@ -551,6 +589,152 @@ WAITING → [admin POST /start] → IN_PROGRESS → [admin POST /end] → ENDED
 ## 12. Role Report
 
 *(Thêm vào đây sau mỗi task hoàn thành)*
+
+### 2026-06-12 — Server-side cover image upload proxy (field/map covers via Supabase)
+
+**Files tạo mới:**
+- `src/uploads/uploads.module.ts` — `UploadsModule`, export `UploadsService`
+- `src/uploads/uploads.service.ts` — `UploadsService`:
+  - `validateCoverImage(file)`: kiểm tra mimetype (chỉ `image/jpeg|png|webp`) + size ≤ 5MB → `BadRequestException(400)` nếu fail, trả về extension tương ứng
+  - `uploadCoverImage(bucket, objectKey, file)`: gọi Supabase Storage REST API bằng native `fetch`, header `Authorization: Bearer <SUPABASE_SERVICE_ROLE_KEY>` + `x-upsert: true`; trả public URL; throw `InternalServerErrorException(500)` nếu Supabase fail (không update DB trong trường hợp này)
+- `src/uploads/dto/cover-image-response.dto.ts` — `CoverImageResponseDto { coverImageUrl: string }`
+
+**Files sửa:**
+- `src/admin/admin.module.ts` — import `UploadsModule`
+- `src/admin/admin-field.controller.ts` — thêm `POST fields/:id/cover-image` (FileInterceptor('file')); validate field tồn tại (404 nếu không) → validate file → upload bucket `field-covers` key `field-{fieldId}.{ext}` → update `fields.cover_image_url` → return `{ coverImageUrl }`
+- `src/admin/admin-management.service.ts` — thêm `updateFieldCoverImage(fieldId, coverImageUrl)`
+- `src/admin/maps/maps.controller.ts` — thêm `POST maps/:id/cover-image` (FileInterceptor('file')); cùng pattern, bucket `map-covers` key `map-{mapId}.{ext}`
+- `src/admin/maps/maps.service.ts` — thêm `updateMapCoverImage(mapId, coverImageUrl)`
+- `package.json` — thêm devDependency `@types/multer`
+- `.env.example`, `.env.staging.example`, `.env.production.example` — thêm `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (placeholder)
+- `CLAUDE.md` — section 6 (API map) thêm 2 endpoints, section 8 (Environment Variables) thêm sub-section "Supabase Storage"
+
+**Endpoint thực tế (lưu ý khác path trong original spec):**
+```
+POST /v1/admin/fields/{fieldId}/cover-image   (JwtAuthGuard + AdminGuard)
+POST /v1/admin/maps/{mapId}/cover-image       (JwtAuthGuard + AdminGuard)
+Content-Type: multipart/form-data, field name "file"
+Response: { coverImageUrl: string }
+```
+Spec gốc đề `/v1/fields/{fieldId}/cover-image` và `/v1/maps/{mapId}/cover-image` (không prefix `/admin`), nhưng cả 2 controller hiện tại (`AdminFieldController`, `MapsController`) đều mount ở `v1/admin` với `@UseGuards(JwtAuthGuard, AdminGuard)` — giữ nguyên prefix `/v1/admin` để nhất quán với toàn bộ admin CRUD pattern hiện có (admin field/map management vốn đã ở dưới `/v1/admin`). Admin team cần update FE để gọi đúng `/v1/admin/...`.
+
+**Cần devops/admin làm thủ công:**
+- Set `SUPABASE_SERVICE_ROLE_KEY` (và `SUPABASE_URL` nếu chưa có) qua `flyctl secrets set -c fly.staging.toml ...` và `-c fly.production.toml ...`
+- Đảm bảo bucket `field-covers` và `map-covers` đã tồn tại trên Supabase Storage (đã có, giữ tên cũ)
+- Admin dashboard (airsoft-tactic-admin) cần đổi flow upload: gọi `POST /v1/admin/fields/{id}/cover-image` / `POST /v1/admin/maps/{id}/cover-image` (multipart, field "file") thay vì upload trực tiếp lên Supabase bằng `NEXT_PUBLIC_SUPABASE_ANON_KEY`; có thể remove `uploadFieldCover`/`uploadMapCover`/`listMapCovers`/`NEXT_PUBLIC_SUPABASE_*` khỏi `airsoft-tactic-admin/src/lib/supabase.ts` sau khi migrate (out of scope cho task này — chỉ làm phía server)
+
+**Notes:**
+- `listMapCovers` (gallery ảnh cũ) KHÔNG implement lại — out of scope theo yêu cầu
+- Không validate file ở `ValidationPipe` (multipart không qua class-validator) — validate thủ công trong `UploadsService.validateCoverImage`
+- Multer dùng memory storage mặc định (`FileInterceptor` không config storage) → `file.buffer` available, phù hợp để forward trực tiếp lên Supabase qua `fetch`
+- Thứ tự xử lý: kiểm tra field/map tồn tại (404) → validate file (400) → upload Supabase (500 nếu fail, KHÔNG update DB) → update DB → return URL
+
+### 2026-06-12 — Remove local Postgres, always connect to Supabase
+
+**Files sửa:**
+- `src/database/database.module.ts` — `TypeOrmModule.forRootAsync` factory: `DB_HOST` default đổi từ local sang `db.ycqcvjpqdvlsoqclstht.supabase.co`; thêm `DB_SSL` config (default `true`) → `ssl: sslEnabled ? { rejectUnauthorized: false } : false`; log connection có thêm `(ssl=...)`; error log sửa thành "Check DB_HOST / DB_PORT / DB_PASSWORD (Supabase) in .env.local"
+- `.env.local` — DB section đổi từ local Postgres sang Supabase (`DB_HOST=db.ycqcvjpqdvlsoqclstht.supabase.co`, `DB_SSL=true`, `DB_PASSWORD` placeholder)
+- `.env.staging` — DB section đổi từ `DB_HOST=localhost` sang Supabase (cùng project, `DB_SSL=true`, `DB_PASSWORD` placeholder)
+- `.env.example`, `.env.production` — thêm `DB_SSL=true`
+- `CLAUDE.md` — section 8: bỏ ví dụ `DB_HOST=localhost` và block "`.env.local` override cho Docker PostgreSQL local"; document `DB_SSL`; section 9: bỏ bước `docker compose up -d`
+
+**Notes:**
+- Server (local dev, staging, production) đều connect cùng 1 Supabase Postgres project (`ycqcvjpqdvlsoqclstht`) — không còn DB local nào, không có docker-compose file trong repo (đã confirm)
+- Cần điền thủ công (secret, KHÔNG commit giá trị thật):
+  - `.env.local`: `DB_PASSWORD` (Supabase Dashboard > Project Settings > Database > Connection string), `SUPABASE_SERVICE_ROLE_KEY`
+  - `.env.staging`: `DB_PASSWORD`, `JWT_SECRET`, `SUPABASE_SERVICE_ROLE_KEY`
+- `DB_HOST`/`DB_PORT`/`DB_NAME`/`DB_USER`/`DB_SSL` có default trong code → nếu không set trong `.env.*`, server vẫn connect được Supabase (chỉ thiếu `DB_PASSWORD` sẽ fail auth)
+
+### 2026-06-12 — Fix missing `game_matches`/`maps`/`field_hours` schema via new migration V17
+
+**Vấn đề:** `column GameMatch.team_count does not exist` — cùng root cause với V16 (xem entry
+dưới), nhưng lần này là V10–V13 (match flow refactor, maps/map_areas tables, field_hours
+table, game_areas constraint, maps.cover_image_url) bị mark "applied" mà chưa thực sự chạy
+trên Supabase.
+
+**Files tạo mới:**
+- `src/migrations/V17__resync_match_flow_and_maps.sql` — bản idempotent của V10–V13:
+  `ADD COLUMN IF NOT EXISTS` cho `game_matches` (team_count, respawn_enabled,
+  respawn_delay_seconds, scheduled_end_at, map_id), `CREATE TABLE IF NOT EXISTS`
+  cho `maps`/`map_areas`/`field_hours`, FK `fk_game_matches_map` wrap trong
+  `DO $$ ... IF NOT EXISTS (pg_constraint) $$`, `CREATE INDEX IF NOT EXISTS`,
+  `DROP CONSTRAINT IF EXISTS game_areas_area_type_check`,
+  `maps.cover_image_url ADD COLUMN IF NOT EXISTS`.
+- Là version mới (V17) → tự chạy ở lần start server tiếp theo, không cần SQL thủ công.
+
+**Lưu ý:** V1–V9 (base schema) CHƯA được verify lại — nếu Supabase snapshot ban đầu predates
+cả những migration đó, có thể còn lỗi "column does not exist" khác xuất hiện dần khi gọi
+các endpoint chưa test. Pattern xử lý giống nhau: tạo migration version mới với nội dung
+idempotent (`IF NOT EXISTS`/`DO` block check `pg_constraint`), KHÔNG sửa file migration cũ.
+
+### 2026-06-12 — Fix missing `fields` columns (phone/website/...) via new migration V16
+
+**Vấn đề:** `POST /v1/admin/fields` → `QueryFailedError: column "phone" of relation "fields" does not exist`.
+Root cause: khi server connect Supabase DB lần đầu, `schema_migrations` rỗng nhưng table
+`fields` đã tồn tại (restore từ snapshot cũ) → bootstrap logic trong `database.module.ts`
+đánh dấu TẤT CẢ migration files (kể cả V14/V15) là "applied" mà KHÔNG thực sự chạy →
+cột `phone`, `website`, `min_age`, `entry_fee`, `entry_fee_currency`, `rental_available`,
+`is_verified` chưa tồn tại trên Supabase dù entity/DTO đã expect.
+
+**Files tạo mới:**
+- `src/migrations/V16__resync_field_columns.sql` — re-apply nội dung V14 + V15
+  (toàn bộ `ADD COLUMN IF NOT EXISTS`, idempotent). Vì là version MỚI (V16), chưa có
+  trong `schema_migrations` → tự chạy ở lần start server tiếp theo, không cần SQL thủ công.
+
+**Notes / cảnh báo cho tương lai:**
+- Bootstrap logic (`DatabaseHealthService.runMigrations`) hiện chỉ check table `fields`
+  có tồn tại không để quyết định "DB đã setup, mark hết migrations = applied". Nếu DB
+  được restore từ snapshot ở version cũ hơn HEAD, các migration sau đó sẽ bị mark applied
+  sai → cần thêm migration mới (version cao hơn) với `IF NOT EXISTS`/idempotent để tự
+  resync, KHÔNG sửa lại file migration cũ đã đánh version thấp hơn (vì đã bị mark applied).
+
+### 2026-06-12 — Fix DB connection: use Supabase IPv4 transaction pooler
+
+**Vấn đề:** `npm run start:dev` báo `ECONNREFUSED <ipv6-address>:5432` — direct host
+`db.<ref>.supabase.co` chỉ resolve sang IPv6, network local không có route IPv6 tới
+Supabase nên connect fail.
+
+**Fix:** Đổi sang Supabase Connection Pooler (Supavisor, IPv4) — transaction mode, port 6543,
+username dạng `postgres.<project-ref>`.
+
+**Files sửa:**
+- `src/database/database.module.ts` — default `DB_HOST=aws-1-us-east-1.pooler.supabase.com`,
+  `DB_PORT=6543`, `DB_USER=postgres.ycqcvjpqdvlsoqclstht`
+- `.env.local`, `.env.staging`, `.env.production`, `.env.example` — cùng đổi
+  `DB_HOST`/`DB_PORT`/`DB_USER` sang pooler
+- `CLAUDE.md` — section 8 cập nhật hướng dẫn lấy connection string từ Connect > ORM
+
+**Notes:**
+- Transaction pooler (6543) không support session-level features (advisory locks, LISTEN/NOTIFY,
+  prepared statements) — TypeORM với query parameterized thông thường + `synchronize: false` hoạt
+  động bình thường. Nếu sau này cần session features, đổi `DB_PORT=5432` (session pooler) cùng host.
+- Region pooler host (`aws-1-us-east-1`) lấy từ Supabase "Connect" dialog của project — nếu project
+  region khác, cần lấy lại connection string đúng region.
+
+### 2026-06-12 — CI/CD: Pipeline stages + switch deploy to Fly.io
+
+**Files tạo mới:**
+- `fly.staging.toml` — Fly app `airsoft-tactic-server-staging`, region `sin`, shared-cpu-1x/256mb, `min_machines_running=1`
+- `fly.production.toml` — Fly app `airsoft-tactic-server-production`, cùng cấu hình
+
+**Files sửa:**
+- `.github/workflows/deploy.yml` — viết lại 3 stage rõ ràng:
+  - `build-and-test`: npm ci + lint + build + test, chạy trên mọi push/PR/dispatch
+  - `deploy-staging`: auto khi push `develop` (hoặc dispatch `environment=staging`), `flyctl deploy -c fly.staging.toml`
+  - `deploy-production`: CHỈ qua `workflow_dispatch` với `environment=production` (manual), `flyctl deploy -c fly.production.toml`
+  - Bỏ GHCR build-and-push + SSH/Docker deploy (VPS) — thay bằng Fly.io
+- `package.json` — thêm script `test` placeholder (chưa có test suite thật)
+- `CLAUDE.md` — thêm section "Deploy — Fly.io" trong mục 8 (Environment Variables)
+
+**Cần làm thủ công (Claude không tự tạo được):**
+- `flyctl apps create airsoft-tactic-server-staging` và `-production`
+- `flyctl secrets set -c fly.staging.toml ...` / `fly.production.toml` cho DB_*, JWT_SECRET, CORS_ORIGIN
+- Tạo GitHub secret `FLY_API_TOKEN` (Settings → Environments → staging & production)
+- (Optional) `flyctl certs add` để gắn domain `api-staging.airtac.app` / `api.airtac.app`
+
+**Notes:**
+- Dockerfile hiện có (npm-based) dùng được trực tiếp cho Fly build — không cần sửa
+- `.env.staging`/`.env.production` KHÔNG dùng trên Fly — toàn bộ config qua `flyctl secrets` + `[env]` trong fly.toml
 
 ### 2026-06-07 — Feature: Opening Hours
 

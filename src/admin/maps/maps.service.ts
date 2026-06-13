@@ -128,6 +128,16 @@ export class MapsService {
     return this.toMapDto(saved);
   }
 
+  // ─── updateMapCoverImage ─────────────────────────────────────────────────────
+
+  /** Persist the cover image URL for a map after a successful Supabase upload. */
+  async updateMapCoverImage(mapId: string, coverImageUrl: string): Promise<void> {
+    const map = await this.mapRepo.findOne({ where: { id: mapId } });
+    if (!map) throw new NotFoundException(`Map not found: ${mapId}`);
+    map.coverImageUrl = coverImageUrl;
+    await this.mapRepo.save(map);
+  }
+
   // ─── deleteMap ───────────────────────────────────────────────────────────────
 
   async deleteMap(mapId: string): Promise<void> {

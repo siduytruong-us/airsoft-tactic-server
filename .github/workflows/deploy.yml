@@ -1,0 +1,91 @@
+name: Build & Deploy (Server)
+
+# Stages:
+#   1. build-and-test     - always (push to main/develop, PRs, workflow_dispatch)
+#   2. deploy-staging      - auto on push to "develop" (after build-and-test)
+#   3. deploy-production   - MANUAL ONLY (workflow_dispatch with environment=production)
+#
+# Deploy target: Fly.io (flyctl deploy using fly.staging.toml / fly.production.toml)
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to deploy (manual trigger)"
+        required: true
+        type: choice
+        options: [staging, production]
+
+permissions:
+  contents: read
+
+jobs:
+  # ───────────────────────────────────────────
+  # Stage 1: Build & run tests
+  # ───────────────────────────────────────────
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      - name: Run tests
+        run: npm run test
+
+  # ───────────────────────────────────────────
+  # Stage 2: Deploy staging — automatic on push to "develop"
+  # (or manual dispatch with environment=staging)
+  # ───────────────────────────────────────────
+  deploy-staging:
+    needs: build-and-test
+    if: |
+      (github.event_name == 'push' && github.ref == 'refs/heads/develop') ||
+      (github.event_name == 'workflow_dispatch' && inputs.environment == 'staging')
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy to Fly.io (staging)
+        run: flyctl deploy --remote-only -c fly.staging.toml
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+  # ───────────────────────────────────────────
+  # Stage 3: Deploy production — MANUAL ONLY
+  # (workflow_dispatch with environment=production)
+  # Use the GitHub Environment "production" protection rules
+  # (required reviewers) for an extra approval gate.
+  # ───────────────────────────────────────────
+  deploy-production:
+    needs: build-and-test
+    if: github.event_name == 'workflow_dispatch' && inputs.environment == 'production'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy to Fly.io (production)
+        run: flyctl deploy --remote-only -c fly.production.toml
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

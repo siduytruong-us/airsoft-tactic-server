@@ -9,8 +9,11 @@ import {
   Patch,
   Post,
   Put,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../common/guards/jwt.guard';
 import { AdminGuard } from '../common/guards/admin.guard';
 import { AdminManagementService, FieldResponseDto, GameModeResponseDto, MatchResponseDto, UpdateMatchDto } from './admin-management.service';
@@ -20,11 +23,16 @@ import { CreateGameModeDto } from './dto/create-game-mode.dto';
 import { AdminStatsDto } from './dto/admin-stats.dto';
 import { UpdateFieldHoursDto } from './dto/update-field-hours.dto';
 import { OpeningHourDto } from '../fields/dto/field-response.dto';
+import { UploadsService } from '../uploads/uploads.service';
+import { CoverImageResponseDto } from '../uploads/dto/cover-image-response.dto';
 
 @Controller('v1/admin')
 @UseGuards(JwtAuthGuard, AdminGuard)
 export class AdminFieldController {
-  constructor(private readonly adminService: AdminManagementService) {}
+  constructor(
+    private readonly adminService: AdminManagementService,
+    private readonly uploadsService: UploadsService,
+  ) {}
 
   @Get('stats')
   async getStats(): Promise<AdminStatsDto> {
@@ -59,6 +67,29 @@ export class AdminFieldController {
   @HttpCode(HttpStatus.NO_CONTENT)
   async deleteField(@Param('id') id: string): Promise<void> {
     return this.adminService.deleteField(id);
+  }
+
+  @Post('fields/:id/cover-image')
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadFieldCoverImage(
+    @Param('id') id: string,
+    @UploadedFile() file?: Express.Multer.File,
+  ): Promise<CoverImageResponseDto> {
+    // Validate field exists first — avoid uploading to storage for a non-existent field
+    await this.adminService.getField(id);
+
+    const ext = this.uploadsService.validateCoverImage(file);
+    const objectKey = `field-${id}.${ext}`;
+
+    const coverImageUrl = await this.uploadsService.uploadCoverImage(
+      'field-covers',
+      objectKey,
+      file as Express.Multer.File,
+    );
+
+    await this.adminService.updateFieldCoverImage(id, coverImageUrl);
+
+    return { coverImageUrl };
   }
 
   @Put('fields/:id/hours')

@@ -8,19 +8,27 @@ import {
   Param,
   Post,
   Put,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 
 import { JwtAuthGuard } from '../../common/guards/jwt.guard';
 import { AdminGuard } from '../../common/guards/admin.guard';
 import { MapsService, MapDto, MapAreaDto } from './maps.service';
 import { CreateMapDto, UpdateMapDto } from './dto/create-map.dto';
 import { CreateMapAreaDto, UpdateMapAreaDto } from './dto/create-map-area.dto';
+import { UploadsService } from '../../uploads/uploads.service';
+import { CoverImageResponseDto } from '../../uploads/dto/cover-image-response.dto';
 
 @Controller('v1/admin')
 @UseGuards(JwtAuthGuard, AdminGuard)
 export class MapsController {
-  constructor(private readonly mapsService: MapsService) {}
+  constructor(
+    private readonly mapsService: MapsService,
+    private readonly uploadsService: UploadsService,
+  ) {}
 
   // ─── Maps under a field ──────────────────────────────────────────────────────
 
@@ -57,6 +65,29 @@ export class MapsController {
   @HttpCode(HttpStatus.NO_CONTENT)
   async deleteMap(@Param('id') mapId: string): Promise<void> {
     return this.mapsService.deleteMap(mapId);
+  }
+
+  @Post('maps/:id/cover-image')
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadMapCoverImage(
+    @Param('id') mapId: string,
+    @UploadedFile() file?: Express.Multer.File,
+  ): Promise<CoverImageResponseDto> {
+    // Validate map exists first — avoid uploading to storage for a non-existent map
+    await this.mapsService.getMap(mapId);
+
+    const ext = this.uploadsService.validateCoverImage(file);
+    const objectKey = `map-${mapId}.${ext}`;
+
+    const coverImageUrl = await this.uploadsService.uploadCoverImage(
+      'map-covers',
+      objectKey,
+      file as Express.Multer.File,
+    );
+
+    await this.mapsService.updateMapCoverImage(mapId, coverImageUrl);
+
+    return { coverImageUrl };
   }
 
   // ─── Map areas ───────────────────────────────────────────────────────────────

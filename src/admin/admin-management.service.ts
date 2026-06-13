@@ -179,6 +179,14 @@ export class AdminManagementService {
     return this.toFieldDto(field);
   }
 
+  /** Persist the cover image URL for a field after a successful Supabase upload. */
+  async updateFieldCoverImage(fieldId: string, coverImageUrl: string): Promise<void> {
+    const field = await this.fieldRepo.findOne({ where: { id: fieldId } });
+    if (!field) throw new NotFoundException(`Field not found: ${fieldId}`);
+    field.coverImageUrl = coverImageUrl;
+    await this.fieldRepo.save(field);
+  }
+
   async updateField(fieldId: string, dto: UpdateFieldDto): Promise<FieldResponseDto> {
     const field = await this.fieldRepo.findOne({ where: { id: fieldId } });
     if (!field) throw new NotFoundException(`Field not found: ${fieldId}`);

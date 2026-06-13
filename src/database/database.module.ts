@@ -26,7 +26,7 @@ class DatabaseHealthService implements OnModuleInit {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       this.logger.error(`❌ PostgreSQL connection FAILED: ${msg}`);
-      this.logger.error(`   Check DB_HOST / DB_PORT / DB_PASSWORD in .env.local`);
+      this.logger.error(`   Check DB_HOST / DB_PORT / DB_PASSWORD (Supabase) in .env.local`);
       return;
     }
 
@@ -117,15 +117,20 @@ class DatabaseHealthService implements OnModuleInit {
     TypeOrmModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService) => {
-        const host     = config.get('DB_HOST', 'localhost');
-        const port     = config.get<number>('DB_PORT', 5432);
+        // Server always connects to Supabase Postgres — no local DB.
+        // Direct host (db.<ref>.supabase.co) is IPv6-only; use the IPv4 transaction
+        // pooler (Supavisor) by default so it works on IPv4-only networks.
+        const host     = config.get('DB_HOST', 'aws-1-us-east-1.pooler.supabase.com');
+        const port     = config.get<number>('DB_PORT', 6543);
         const database = config.get('DB_NAME', 'postgres');
-        const username = config.get('DB_USER', 'postgres');
+        const username = config.get('DB_USER', 'postgres.ycqcvjpqdvlsoqclstht');
         const password = config.get('DB_PASSWORD', '');
         const nodeEnv  = config.get('NODE_ENV', 'development');
+        // Supabase Postgres requires SSL. Allow opt-out via DB_SSL=false for edge cases.
+        const sslEnabled = config.get('DB_SSL', 'true') !== 'false';
 
         const logger = new Logger('DatabaseModule');
-        logger.log(`⚙️  Connecting → ${username}@${host}:${port}/${database}`);
+        logger.log(`⚙️  Connecting → ${username}@${host}:${port}/${database} (ssl=${sslEnabled})`);
 
         return {
           type: 'postgres',
@@ -134,6 +139,7 @@ class DatabaseHealthService implements OnModuleInit {
           database,
           username,
           password,
+          ssl: sslEnabled ? { rejectUnauthorized: false } : false,
           synchronize: false,
           autoLoadEntities: true,
           logging: nodeEnv === 'local' ? ['query', 'error'] : ['error'],
