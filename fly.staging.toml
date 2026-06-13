@@ -1,9 +1,8 @@
 # Fly.io config — STAGING
 # Deploy manually:  flyctl deploy -c fly.staging.toml --remote-only
-# App must exist first:  flyctl apps create airsoft-tactic-server-staging
 
-app = "airsoft-tactic-server-staging"
-primary_region = "sin"
+app = "airtac-staging"
+primary_region = "dfw"
 
 [build]
 

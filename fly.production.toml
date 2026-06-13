@@ -3,7 +3,7 @@
 # App must exist first:  flyctl apps create airsoft-tactic-server-production
 
 app = "airsoft-tactic-server-production"
-primary_region = "sin"
+primary_region = "dfw"
 
 [build]
 

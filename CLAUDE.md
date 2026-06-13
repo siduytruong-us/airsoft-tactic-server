@@ -476,7 +476,7 @@ SUPABASE_SERVICE_ROLE_KEY=<service-role-secret>
 
 ### Deploy — Fly.io
 
-- 2 Fly apps, mỗi app = 1 environment: `airsoft-tactic-server-staging`, `airsoft-tactic-server-production`
+- 2 Fly apps, mỗi app = 1 environment: `airtac-staging`, `airsoft-tactic-server-production`
 - Config: `fly.staging.toml` / `fly.production.toml` (region `sin`, `shared-cpu-1x`/256mb, `min_machines_running = 1` để giữ WebSocket connections sống)
 - `[build]` dùng `Dockerfile` hiện có — không cần thay đổi
 - Secrets (DB_*, JWT_SECRET, CORS_ORIGIN...) set qua `flyctl secrets set -c fly.staging.toml KEY=value` (không dùng `.env` file trong image)
@@ -488,7 +488,7 @@ SUPABASE_SERVICE_ROLE_KEY=<service-role-secret>
 - Setup lần đầu (1 lần per app):
   ```bash
   flyctl auth login
-  flyctl apps create airsoft-tactic-server-staging
+  flyctl apps create airtac-staging
   flyctl apps create airsoft-tactic-server-production
   flyctl secrets set -c fly.staging.toml DB_HOST=... DB_PASSWORD=... JWT_SECRET=... CORS_ORIGIN=...
   flyctl secrets set -c fly.production.toml DB_HOST=... DB_PASSWORD=... JWT_SECRET=... CORS_ORIGIN=...
@@ -714,7 +714,7 @@ username dạng `postgres.<project-ref>`.
 ### 2026-06-12 — CI/CD: Pipeline stages + switch deploy to Fly.io
 
 **Files tạo mới:**
-- `fly.staging.toml` — Fly app `airsoft-tactic-server-staging`, region `sin`, shared-cpu-1x/256mb, `min_machines_running=1`
+- `fly.staging.toml` — Fly app `airtac-staging`, region `sin`, shared-cpu-1x/256mb, `min_machines_running=1`
 - `fly.production.toml` — Fly app `airsoft-tactic-server-production`, cùng cấu hình
 
 **Files sửa:**
@@ -727,7 +727,7 @@ username dạng `postgres.<project-ref>`.
 - `CLAUDE.md` — thêm section "Deploy — Fly.io" trong mục 8 (Environment Variables)
 
 **Cần làm thủ công (Claude không tự tạo được):**
-- `flyctl apps create airsoft-tactic-server-staging` và `-production`
+- `flyctl apps create airtac-staging` và `-production`
 - `flyctl secrets set -c fly.staging.toml ...` / `fly.production.toml` cho DB_*, JWT_SECRET, CORS_ORIGIN
 - Tạo GitHub secret `FLY_API_TOKEN` (Settings → Environments → staging & production)
 - (Optional) `flyctl certs add` để gắn domain `api-staging.airtac.app` / `api.airtac.app`

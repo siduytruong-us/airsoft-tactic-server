@@ -8,7 +8,6 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, In } from 'typeorm';
-import { randomUUID } from 'crypto';
 
 import { GameMatch } from '../database/entities/game-match.entity';
 import { Team } from '../database/entities/team.entity';
@@ -42,10 +41,6 @@ interface HitEventRow {
 
 interface ActiveMatchRow {
   match_id: string;
-}
-
-interface IsAliveRow {
-  exists: string | boolean;
 }
 
 // GameMatch loaded with relations
@@ -663,7 +658,7 @@ export class MatchesService {
     const userIds  = players.map(p => p.user_id);
     const wins     = players.map(p => match.winningTeamId === null ? 0 : (match.winningTeamId === p.team_id ? 1 : 0));
     const losses   = players.map(p => match.winningTeamId !== null && match.winningTeamId !== p.team_id ? 1 : 0);
-    const draws    = players.map(p => match.winningTeamId === null ? 1 : 0);
+    const draws    = players.map(() => match.winningTeamId === null ? 1 : 0);
 
     await this.dataSource.query(
       `INSERT INTO player_stats (user_id, total_matches, wins, losses, draws, total_kills, total_deaths, updated_at)

@@ -8,7 +8,7 @@ import { Logger, Injectable, Inject, forwardRef } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { randomUUID } from 'crypto';
-import { WebSocket, WebSocketServer } from 'ws';
+import { WebSocket } from 'ws';
 import { JwtUtil } from '../common/utils/jwt.util';
 import { MatchEventPublisher } from './match-event.publisher';
 import {

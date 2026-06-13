@@ -2,8 +2,12 @@ name: Build & Deploy (Server)
 
 # Stages:
 #   1. build-and-test     - always (push to main/develop, PRs, workflow_dispatch)
-#   2. deploy-staging      - auto on push to "develop" (after build-and-test)
-#   3. deploy-production   - MANUAL ONLY (workflow_dispatch with environment=production)
+#   2. deploy-staging      - auto after build-and-test, on push to "main"
+#                             or any manual workflow_dispatch run
+#   3. deploy-production   - MANUAL ONLY (workflow_dispatch), and ONLY if
+#                             deploy-staging succeeded in the SAME run
+#                             (no skipping staging) — plus the "production"
+#                             GitHub Environment's required-reviewer approval
 #
 # Deploy target: Fly.io (flyctl deploy using fly.staging.toml / fly.production.toml)
 on:
@@ -11,13 +15,7 @@ on:
     branches: [main, develop]
   pull_request:
     branches: [main, develop]
-  workflow_dispatch:
-    inputs:
-      environment:
-        description: "Environment to deploy (manual trigger)"
-        required: true
-        type: choice
-        options: [staging, production]
+  workflow_dispatch: {}
 
 permissions:
   contents: read
@@ -49,20 +47,46 @@ jobs:
         run: npm run test
 
   # ───────────────────────────────────────────
-  # Stage 2: Deploy staging — automatic on push to "develop"
-  # (or manual dispatch with environment=staging)
+  # Stage 2: Deploy staging — automatic on push to "main",
+  # or as the first step of any manual workflow_dispatch run
+  # (required before production can deploy in the same run)
   # ───────────────────────────────────────────
   deploy-staging:
     needs: build-and-test
     if: |
-      (github.event_name == 'push' && github.ref == 'refs/heads/develop') ||
-      (github.event_name == 'workflow_dispatch' && inputs.environment == 'staging')
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     environment: staging
     steps:
       - uses: actions/checkout@v4
 
       - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Validate required secrets
+        env:
+          DB_CONFIG_JSON: ${{ secrets.DB_CONFIG_JSON }}
+          APP_CONFIG_JSON: ${{ secrets.APP_CONFIG_JSON }}
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          for v in DB_CONFIG_JSON APP_CONFIG_JSON FLY_API_TOKEN; do
+            if [ -z "${!v}" ]; then
+              echo "::error::Missing secret '$v' in the 'staging' GitHub Environment (Settings → Environments → staging → Secrets)"
+              exit 1
+            fi
+          done
+          echo "$DB_CONFIG_JSON" | jq empty
+          echo "$APP_CONFIG_JSON" | jq empty
+
+      - name: Apply config to Fly secrets
+        env:
+          DB_CONFIG_JSON: ${{ secrets.DB_CONFIG_JSON }}
+          APP_CONFIG_JSON: ${{ secrets.APP_CONFIG_JSON }}
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          jq -s -r 'add | to_entries[] | "\(.key)=\(.value)"' \
+            <(echo "$DB_CONFIG_JSON") <(echo "$APP_CONFIG_JSON") \
+            | flyctl secrets import -c fly.staging.toml --stage
 
       - name: Deploy to Fly.io (staging)
         run: flyctl deploy --remote-only -c fly.staging.toml
@@ -71,19 +95,46 @@ jobs:
 
   # ───────────────────────────────────────────
   # Stage 3: Deploy production — MANUAL ONLY
-  # (workflow_dispatch with environment=production)
-  # Use the GitHub Environment "production" protection rules
-  # (required reviewers) for an extra approval gate.
+  # (workflow_dispatch)
+  # - Requires build-and-test to pass
+  # - Requires deploy-staging to have SUCCEEDED in this same run
+  #   (staging is never skipped — if it fails, production does not run)
+  # - GitHub Environment "production" has required-reviewer approval gate
   # ───────────────────────────────────────────
   deploy-production:
-    needs: build-and-test
-    if: github.event_name == 'workflow_dispatch' && inputs.environment == 'production'
+    needs: [build-and-test, deploy-staging]
+    if: github.event_name == 'workflow_dispatch' && needs.deploy-staging.result == 'success'
     runs-on: ubuntu-latest
     environment: production
     steps:
       - uses: actions/checkout@v4
 
       - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Validate required secrets
+        env:
+          DB_CONFIG_JSON: ${{ secrets.DB_CONFIG_JSON }}
+          APP_CONFIG_JSON: ${{ secrets.APP_CONFIG_JSON }}
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          for v in DB_CONFIG_JSON APP_CONFIG_JSON FLY_API_TOKEN; do
+            if [ -z "${!v}" ]; then
+              echo "::error::Missing secret '$v' in the 'production' GitHub Environment (Settings → Environments → production → Secrets)"
+              exit 1
+            fi
+          done
+          echo "$DB_CONFIG_JSON" | jq empty
+          echo "$APP_CONFIG_JSON" | jq empty
+
+      - name: Apply config to Fly secrets
+        env:
+          DB_CONFIG_JSON: ${{ secrets.DB_CONFIG_JSON }}
+          APP_CONFIG_JSON: ${{ secrets.APP_CONFIG_JSON }}
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          jq -s -r 'add | to_entries[] | "\(.key)=\(.value)"' \
+            <(echo "$DB_CONFIG_JSON") <(echo "$APP_CONFIG_JSON") \
+            | flyctl secrets import -c fly.production.toml --stage
 
       - name: Deploy to Fly.io (production)
         run: flyctl deploy --remote-only -c fly.production.toml
